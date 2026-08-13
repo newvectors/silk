@@ -137,30 +137,53 @@ func buttonLabels(box *gui.ButtonBox) []string {
 	return out
 }
 
+// dropSpace drops one unnamed spring on the scene at the given y (mm) and
+// returns the live widget codegen reads the designed values back off.
+func dropSpace(t *testing.T, scene *GedScene, y float64) *gui.Space {
+	t.Helper()
+	fake := addNamedWidget(t, scene, "gui.Space", "", y)
+	space, ok := fake.Widget().(*gui.Space)
+	if !ok {
+		t.Fatalf("dropped gui.Space produced a %T", fake.Widget())
+	}
+	return space
+}
+
 // TestGeneratedCodeReproducesDesignedSpace is the same two-sided assertion for
-// the spring. A Space with no properties in the emitter table is inert once
-// generated — it comes out as gui.NewSpace(false, false) whatever the designer
-// set — and a Space whose defaults are emitted anyway fills every generated
-// constructor with noise.
+// the spring, held on both of its properties. A Space with no properties in the
+// emitter table is inert once generated — it comes out as
+// gui.NewSpace(false, false) whatever the designer set, so a spring flipped to
+// 垂直 on the canvas builds a horizontal one in the program — and a Space whose
+// defaults are emitted anyway fills every generated constructor with noise.
+// The two flags are designed on separate springs on purpose: one spring
+// carrying both would generate identically if the table's two entries read the
+// same getter, since 垂直 and 弹性 are both bools defaulting to false.
 func TestGeneratedCodeReproducesDesignedSpace(t *testing.T) {
 	scene := NewGedScene()
 	scene.SetFormTitle("Spring")
 	scene.SetSize(120, 60)
 
-	fake := addNamedWidget(t, scene, "gui.Space", "", 5)
-	space, ok := fake.Widget().(*gui.Space)
-	if !ok {
-		t.Fatalf("dropped gui.Space produced a %T", fake.Widget())
-	}
+	dropSpace(t, scene, 5).SetVertical(true)
+	dropSpace(t, scene, 20).SetExpand(true)
 
-	space.SetExpand(true)
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "SpringUI"})
-	const want = "ui.Space1.SetExpand(true)"
-	if !strings.Contains(code, want) {
-		t.Errorf("designed stretch not reproduced: missing %s\n----\n%s", want, code)
+	for _, want := range []string{
+		"ui.Space1.SetVertical(true)",
+		"ui.Space2.SetExpand(true)",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("designed spring not reproduced: missing %s\n----\n%s", want, code)
+		}
+	}
+	// Each spring changed exactly one flag; the other is still what the drop
+	// produced, so it must stay out of the output.
+	for _, unwanted := range []string{"ui.Space1.SetExpand(", "ui.Space2.SetVertical("} {
+		if strings.Contains(code, unwanted) {
+			t.Errorf("a spring emitted %s for a flag left at its default\n----\n%s", unwanted, code)
+		}
 	}
 
-	// A second, untouched spring: both of its properties sit at the dropped
+	// A third, untouched spring: both of its properties sit at the dropped
 	// defaults, so neither setter may appear.
 	plain := NewGedScene()
 	plain.SetFormTitle("Plain")

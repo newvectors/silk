@@ -84,6 +84,41 @@ func TestGenerateCodeDesignProperties(t *testing.T) {
 	vetGeneratedCode(t, code)
 }
 
+// TestGenerateCodeDesignedGauge closes the positive half of the gauge row.
+// The test above pins that row only from the negative side — a gauge left at
+// its defaults emits nothing — which deleting the row satisfies rather than
+// breaks, so a designed range and unit could stop reaching the generated screen
+// with the suite still green. The cleared title is the fourth entry's own
+// guard: an empty caption is the one title the caption pass skips, so only the
+// table can carry it, and without it a gauge the designer blanked comes back
+// out reading "Gauge".
+func TestGenerateCodeDesignedGauge(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("HMI")
+	scene.SetSize(200, 150)
+
+	addConfiguredFake(t, scene, "gui.Gauge", "g1", func(w interface{}) {
+		w.(interface{ SetMin(float64) }).SetMin(-40)
+		w.(interface{ SetMax(float64) }).SetMax(250)
+		w.(interface{ SetUnit(string) }).SetUnit("kPa")
+		w.(interface{ SetTitle(string) }).SetTitle("")
+	})
+
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "HMIUI"})
+	for _, s := range []string{
+		"ui.G1.SetMin(-40)",
+		"ui.G1.SetMax(250)",
+		`ui.G1.SetUnit("kPa")`,
+		`ui.G1.SetTitle("")`,
+	} {
+		if !strings.Contains(code, s) {
+			t.Errorf("designed gauge not reproduced: missing %s\n----\n%s", s, code)
+		}
+	}
+
+	vetGeneratedCode(t, code)
+}
+
 // TestGenerateCodeColorSurvivesReload is the third leg of the color
 // round-trip. emitDesignProperties reads the *live* widget, not the design
 // document, so a color the designer set was in the saved file yet gone from the
