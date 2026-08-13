@@ -107,6 +107,63 @@ func TestRegisterWidgetReachesPalette(t *testing.T) {
 	}
 }
 
+// TestRegisterWidgetJoinsExistingCategory covers the branch every other test
+// here misses: a plugin asking for a category the palette already has joins it
+// instead of appending a second one under the same name. The other tests all
+// register 测试 (Plugin), which matches nothing built in, so only the append
+// branch ever ran — and TestRegisterWidgetReachesPalette reads the header
+// immediately above the row, which a duplicate header satisfies exactly as well
+// as the real one. What the user would see is the group listed twice, its
+// widgets in the first copy and the plugin alone in the second.
+func TestRegisterWidgetJoinsExistingCategory(t *testing.T) {
+	const existing = "图表 (Charts)"
+	const sibling = "gui.LineChart" // categoryDefs already lists it under existing
+
+	def := pluginTestDef()
+	def.Category = existing
+	registerPluginTestWidget(t, def)
+
+	list := NewWidgetList()
+	headers := 0
+	header := -1
+	pluginUnder, siblingUnder := -1, -1
+	for i := 0; i < list.Count(); i++ {
+		item := list.Item(i)
+		if isHeader, _ := list.isCategoryHeader(i); isHeader {
+			header = i
+			// The row carries the collapse indicator; the category name is the rest.
+			if strings.TrimSpace(strings.TrimPrefix(item.Text, "▼")) == existing {
+				headers++
+			}
+			continue
+		}
+		name, _ := item.Data.(string)
+		switch name {
+		case pluginTestFactory:
+			pluginUnder = header
+		case sibling:
+			siblingUnder = header
+		}
+	}
+
+	if headers != 1 {
+		t.Errorf("palette shows %d headers named %q, want 1", headers, existing)
+	}
+	if siblingUnder < 0 {
+		t.Fatalf("%s left the palette when %s joined %q; rows: %s",
+			sibling, pluginTestFactory, existing, pluginTestPaletteDump(list))
+	}
+	if pluginUnder < 0 {
+		t.Fatalf("no palette row carries %q as its drag payload; rows: %s",
+			pluginTestFactory, pluginTestPaletteDump(list))
+	}
+	if pluginUnder != siblingUnder {
+		t.Errorf("%s sits under the header at row %d, but %q's existing member %s sits under the "+
+			"header at row %d; the plugin got a category of its own instead of joining; rows: %s",
+			pluginTestFactory, pluginUnder, existing, sibling, siblingUnder, pluginTestPaletteDump(list))
+	}
+}
+
 // pluginTestPaletteDump renders the palette rows for a failure message.
 func pluginTestPaletteDump(list *WidgetList) string {
 	var rows []string
