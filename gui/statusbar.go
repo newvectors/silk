@@ -17,7 +17,11 @@ type StatusBar struct {
 	message   string
 	permanent []IWidget // permanent widgets anchored to the right
 	spacing   float64
-	msgTimer  Timer // auto-clears a timed transient message
+	// permanentLeft is the left edge Layout gave the leftmost visible permanent
+	// widget, 0 when none was placed. Draw needs it to know where the message
+	// has to stop; recording it in Layout keeps Draw free of layout math.
+	permanentLeft float64
+	msgTimer      Timer // auto-clears a timed transient message
 }
 
 func NewStatusBar() *StatusBar {
@@ -110,6 +114,7 @@ func (this *StatusBar) Layout() {
 
 	// lay out permanent widgets from the right
 	x := w - m.R
+	this.permanentLeft = 0 // nothing on the right: the message owns the whole bar
 	for i := len(this.permanent) - 1; i >= 0; i-- {
 		pw := this.permanent[i]
 		if !pw.IsVisible() {
@@ -127,6 +132,7 @@ func (this *StatusBar) Layout() {
 		}
 		x -= iw
 		pw.SetBounds(x, y, iw, ih)
+		this.permanentLeft = x
 		x -= this.spacing
 	}
 }
@@ -145,18 +151,27 @@ func (this *StatusBar) Draw(g paint.Painter) {
 	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
 
-	// draw message text on the left
+	// draw message text on the left, cut to the strip the permanent widgets
+	// leave free: they are children, so they paint after the bar, and a cell
+	// like StatusIconLabel draws no background of its own — a long message
+	// would show through the branch name and the error counts as overlapping
+	// glyphs instead of being covered.
 	if this.message != "" {
 		m := t.ButtonMargin
+		avail := w - m.L - m.R
+		if this.permanentLeft > 0 {
+			avail = this.permanentLeft - m.L - this.spacing
+		}
+		msg := elideToWidth(t.Font, this.message, avail)
 		g.SetFont(t.Font)
 		g.SetBrush1(t.TextColor)
-		ext := t.Font.TextExtents(this.message)
+		ext := t.Font.TextExtents(msg)
 		fe := t.Font.FontExtents()
 		_ = fe
 		xt := m.L - ext.XBearing
 		yt := 1 + (h-1+ext.YBearing)*0.5 - ext.YBearing
 		g.Translate(xt, yt)
-		g.DrawText(this.message)
+		g.DrawText(msg)
 		g.Translate(-xt, -yt)
 	}
 }

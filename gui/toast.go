@@ -244,11 +244,15 @@ func (this *toastEntry) Draw(g paint.Painter) {
 	msgFont := paint.NewFont(t.Font.Family(), 13, false, false)
 	g.SetFont(msgFont)
 	g.SetBrush1(textColor)
-	ext := msgFont.TextExtents(this.message)
+	// Cut the message before the close button: it is painted after the text at
+	// w-20 and takes clicks from w-30 on, so an unelided message runs under the
+	// ✕ and gets sliced mid-glyph by the widget clip.
+	msg := elideToWidth(msgFont, this.message, w-40.0-(barW+32.0))
+	ext := msgFont.TextExtents(msg)
 	tx := barW + 32.0 - ext.XBearing
 	ty := 0.5*(h+ext.YBearing) - ext.YBearing
 	g.Translate(tx, ty)
-	g.DrawText(this.message)
+	g.DrawText(msg)
 	g.Translate(-tx, -ty)
 
 	// Close button (rounded X) at right side
