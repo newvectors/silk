@@ -2820,6 +2820,7 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// don't move the widget, so grid snap and the guides compose cleanly.
 	if wasDragging {
 		this.snapSelectionToGrid()
+		this.snapSelectionSizeToGrid()
 		if movesItems {
 			// After the snap, so the re-parent records the resting position —
 			// and so the park judges that same position. target was chosen
@@ -2949,6 +2950,57 @@ func (this *GedView) snapSelectionToGrid() {
 			// widgets inside a dragged container end up offset from it by
 			// whatever the rounding was worth.
 			graph.ShiftSubtree(item, nx-x, ny-y)
+		}
+	}
+}
+
+// snapSelectionSizeToGrid rounds every size-unlocked selected item's width and
+// height onto the grid, the way snapSelectionToGrid does for its position. A
+// form built by dragging widgets in is pixel-tidy; the same form resized by a
+// handle was not, because the handle drag commits the raw scene mm it was
+// released at (graph ResizeDecor.OnEndMoveHandle) — and the status bar prints
+// the size with %.0f, so a 38.3mm widget reads as "38 mm" and nothing on
+// screen betrays the fraction.
+//
+// Manual guides are position guides: they pull an edge, never an extent, so
+// only the grid pitch is consulted here. No-op when snap is disabled. Applied
+// directly (mutate + Update) like snapSelectionToGrid — it tidies the resting
+// size rather than introducing its own resize command.
+func (this *GedView) snapSelectionSizeToGrid() {
+	// The same master switch snapSelectionToGrid reads, so 表单设置 turns the
+	// position snap and the size snap off together.
+	grid := this.gridModel()
+	if !grid.Snap || grid.Pitch <= 0 {
+		return
+	}
+	items := this.Selection().ItemList()
+	selSet := make(map[graph.IItem]bool, len(items))
+	for _, item := range items {
+		selSet[item] = true
+	}
+	for _, item := range items {
+		if item.IsLockSize() {
+			continue
+		}
+		// An item whose own container is selected too was already scaled by
+		// the container's resize; rounding it again would break the ratio the
+		// resize just gave it. Same skip snapSelectionToGrid makes.
+		if hasSelectedAncestor(item, selSet) {
+			continue
+		}
+		w, h := item.Width(), item.Height()
+		nw, nh := snapToGrid(w, grid.Pitch), snapToGrid(h, grid.Pitch)
+		// Anything under half a pitch rounds to zero, and a zero-extent widget
+		// is one the user can neither see nor grab a handle on again. One full
+		// pitch is the smallest size the grid can express.
+		if nw < grid.Pitch {
+			nw = grid.Pitch
+		}
+		if nh < grid.Pitch {
+			nh = grid.Pitch
+		}
+		if nw != w || nh != h {
+			item.SetSize(nw, nh)
 		}
 	}
 }
