@@ -435,6 +435,25 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		}
 		fmt.Fprintf(&buf, "\tui.%s.%s(%q)\n", f.name, setter, f.defaultText)
 	}
+
+	// Reproduce a designed icon by the name it was chosen under — the paint.Icon
+	// alone cannot be written into source. Same rule as the caption above: the
+	// live widget is asked what it implements, so the call always type-checks
+	// against the field's static type, and a widget that names no icon emits
+	// nothing at all.
+	for _, f := range fields {
+		if f.goType == interfaceGoType {
+			continue
+		}
+		named, ok := f.widget.(interface{ IconName() string })
+		if !ok || named.IconName() == "" {
+			continue
+		}
+		if _, ok := f.widget.(interface{ SetIconName(string) }); !ok {
+			continue
+		}
+		fmt.Fprintf(&buf, "\tui.%s.SetIconName(%q)\n", f.name, named.IconName())
+	}
 	buf.WriteString("\n")
 
 	// Design-time property setters: for industrial/组态 widgets, reproduce each

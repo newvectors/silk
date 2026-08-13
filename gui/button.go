@@ -9,6 +9,7 @@ import (
 
 func (this *Button) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
+	list.AddProperty("图标", this.IconName, this.SetIconName)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
 	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
 }
@@ -31,6 +32,7 @@ type Button struct {
 	isDefault   bool
 	//iconVisible bool
 	action     IAction
+	iconName   string // resource name the icon came from, "" for a directly set icon
 	subPopup   IWidget
 	syncRev    uint64
 	cbSubPopup func(IButton)
@@ -360,7 +362,29 @@ func (this *Button) SetText(text string) {
 }
 
 func (this *Button) SetIcon(icon paint.Icon) {
+	// An icon given directly has no name to round-trip, so the old one must go:
+	// keeping it would have the design file save, and codegen emit, a name that
+	// no longer matches the icon actually on the button.
+	this.iconName = ""
 	this.Action().SetIcon(icon)
+}
+
+func (this *Button) IconName() string {
+	return this.iconName
+}
+
+// SetIconName loads the icon by resource name (LoadIcon resolves it under
+// core.ResourceDir()) and remembers the name, which is what makes an icon
+// settable from the designer's property sheet: the name persists into the
+// design file and comes back out as generated code. "" clears both.
+func (this *Button) SetIconName(name string) {
+	if name == "" {
+		this.SetIcon(nil)
+		return
+	}
+	this.SetIcon(LoadIcon(name))
+	// After SetIcon, which clears the name it cannot know.
+	this.iconName = name
 }
 
 //func (this *Button) IsTextVisible() bool {
