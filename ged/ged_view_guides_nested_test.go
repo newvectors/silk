@@ -11,14 +11,14 @@ import "testing"
 //	nested (70,20)-(95,27)    left 70,  right 95,  centre 82.5   (inside box)
 //	free   (10,40)-(35,47)    left 10,  right 35,  centre 22.5
 //	top    (120,90)-(145,97)  left 120, right 145, centre 132.5
-func nestedGuideFixture(t *testing.T) (view *GedView, box, free *FakeWidget) {
+func nestedGuideFixture(t *testing.T) (view *GedView, box, nested, free *FakeWidget) {
 	t.Helper()
 	view = NewGedView()
 	scene := view.GedScene()
 	scene.SetSize(400, 300)
 
 	box = newAlignBox(t, scene, "box", 60, 10, 80, 60)
-	nested := addFakeAt(t, scene, "nested", 70, 20, 25, 7)
+	nested = addFakeAt(t, scene, "nested", 70, 20, 25, 7)
 	nested.SetParent(box)
 	free = addFakeAt(t, scene, "free", 10, 40, 25, 7)
 	addFakeAt(t, scene, "top", 120, 90, 25, 7)
@@ -40,7 +40,7 @@ func dragGuides(view *GedView, item *FakeWidget, dx, dy float64) []alignGuide {
 // produced nothing at all, while the same edge against a top-level sibling
 // produced three guides.
 func TestAlignGuidesSeeInsideContainer(t *testing.T) {
-	view, _, free := nestedGuideFixture(t)
+	view, _, _, free := nestedGuideFixture(t)
 
 	// free.Left is 10; +60 puts it exactly on the nested button's left edge.
 	gs := dragGuides(view, free, 60, 0)
@@ -59,7 +59,7 @@ func TestAlignGuidesSeeInsideContainer(t *testing.T) {
 // above: the same fixture with the edge parked outside alignTolerance produces
 // no guide at 70, so that assertion cannot be true by construction.
 func TestAlignGuidesNestedRespectsTolerance(t *testing.T) {
-	view, _, free := nestedGuideFixture(t)
+	view, _, _, free := nestedGuideFixture(t)
 
 	// Left edge lands at 73 — 3mm off the nested button, twice alignTolerance.
 	gs := dragGuides(view, free, 63, 0)
@@ -78,7 +78,7 @@ func TestAlignGuidesNestedRespectsTolerance(t *testing.T) {
 // against: collecting every descendant would draw a snap line the drag can
 // never satisfy.
 func TestAlignGuidesSkipDraggedContainersOwnChild(t *testing.T) {
-	view, box, _ := nestedGuideFixture(t)
+	view, box, _, _ := nestedGuideFixture(t)
 
 	// box.Left is 60; +10 lands it exactly on its own child's left edge (70).
 	gs := dragGuides(view, box, 10, 0)
@@ -113,7 +113,7 @@ func nestGrandchild(t *testing.T, view *GedView, box *FakeWidget) {
 // the form's VBox — and a walk that stops at the container's own children
 // leaves everything below it unsnappable again.
 func TestAlignGuidesSeeTwoLevelsDown(t *testing.T) {
-	view, box, free := nestedGuideFixture(t)
+	view, box, _, free := nestedGuideFixture(t)
 	nestGrandchild(t, view, box)
 
 	// free.Left is 10; +65 puts it exactly on the grandchild's left edge (75).
@@ -129,7 +129,7 @@ func TestAlignGuidesSeeTwoLevelsDown(t *testing.T) {
 // the selection's direct children leaves this one collected, and the drag gets
 // a snap line for a widget riding along with it.
 func TestAlignGuidesSkipDraggedContainersGrandchild(t *testing.T) {
-	view, box, _ := nestedGuideFixture(t)
+	view, box, _, _ := nestedGuideFixture(t)
 	nestGrandchild(t, view, box)
 
 	// box.Left is 60; +15 lands it exactly on the grandchild's left edge (75).
@@ -146,7 +146,7 @@ func TestAlignGuidesSkipDraggedContainersGrandchild(t *testing.T) {
 // TestAlignGuidesTopLevelSiblingUnchanged is the regression guard: the flat case
 // the recursive walk replaced must still produce exactly the guides it did.
 func TestAlignGuidesTopLevelSiblingUnchanged(t *testing.T) {
-	view, _, free := nestedGuideFixture(t)
+	view, _, _, free := nestedGuideFixture(t)
 
 	// free.Left is 10; +110 puts it exactly on the top-level button's left edge.
 	gs := dragGuides(view, free, 110, 0)
@@ -165,5 +165,59 @@ func TestAlignGuidesTopLevelSiblingUnchanged(t *testing.T) {
 	}
 	if len(gs) != 4 {
 		t.Errorf("%d guides, want 4 (3 vertical + 1 horizontal): %+v", len(gs), gs)
+	}
+}
+
+// nestSibling puts a second Button beside nested inside box — two fields in one
+// container, the arrangement the guides exist for. Its left edge, 105, is a
+// coordinate no other widget in the fixture owns, so a vertical guide there can
+// only have come from it.
+func nestSibling(t *testing.T, view *GedView, box *FakeWidget) *FakeWidget {
+	t.Helper()
+	sibling := addFakeAt(t, view.GedScene(), "sibling", 105, 40, 25, 7)
+	sibling.SetParent(box)
+	return sibling
+}
+
+// TestAlignGuidesDragNestedAgainstSibling drags from inside a container instead
+// of at the top level: two fields in one VBox lined up with each other. The
+// container carries the dragged widget but is not moving with it, so the walk
+// must keep descending into it — excluding a container that holds part of the
+// selection (the mirror of the dragged-container rule) kills every guide inside
+// it and this alignment silently produces nothing.
+func TestAlignGuidesDragNestedAgainstSibling(t *testing.T) {
+	view, box, nested, _ := nestedGuideFixture(t)
+	nestSibling(t, view, box)
+
+	// nested.Left is 70; +35 puts it exactly on the sibling's left edge (105).
+	gs := dragGuides(view, nested, 35, 0)
+
+	if !hasVGuide(gs, 105) {
+		t.Fatalf("no vertical guide at x=105 dragging a button onto its own in-container sibling; got %+v", gs)
+	}
+	// Both buttons are 25 wide, so the dragged rect meets all three of the
+	// sibling's x targets: left 105, centre 117.5 and right 130. Nothing else
+	// is within alignTolerance.
+	if n := countVertical(gs); n != 3 {
+		t.Errorf("%d vertical guides, want 3 (left 105, centre 117.5, right 130 of the sibling): %+v", n, gs)
+	}
+}
+
+// TestAlignGuidesDragNestedOntoContainerEdge is the other everyday nested drag:
+// a widget pushed flush with the edge of the container holding it. The
+// container stays put while its child moves inside it, so its own edges are
+// targets like any other widget's — skip it and the flush-left gesture loses
+// the only line it can aim at.
+func TestAlignGuidesDragNestedOntoContainerEdge(t *testing.T) {
+	view, _, nested, _ := nestedGuideFixture(t)
+
+	// nested.Left is 70; -10 puts it exactly on the VBox's own left edge (60).
+	gs := dragGuides(view, nested, -10, 0)
+
+	if !hasVGuide(gs, 60) {
+		t.Fatalf("no vertical guide at x=60 for a button flush with its own container's left edge; got %+v", gs)
+	}
+	if n := countVertical(gs); n != 1 {
+		t.Errorf("%d vertical guides, want 1 (the VBox left edge at 60): %+v", n, gs)
 	}
 }
