@@ -306,17 +306,33 @@ func (this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext) {
 }
 
 func (this *GedView) OnDragLeave() {
-
+	// The drag moved off the canvas — onto a sibling widget, or out of the
+	// window entirely. The highlight must go with it: dndDragOver leaves the
+	// canvas for good here and OnDragMove is not called again to correct it.
+	this.dropContainer = nil
+	this.Self().Update()
 }
 
 func (this *GedView) OnDragMove(x, y float64, dnd gui.IDndContext) {
 	if !dnd.HasFormat("text/plain") {
 		dnd.SetAction(gui.DndIgnore)
+		// A drag we refuse may still be over a container we highlighted while
+		// an earlier, acceptable payload was in flight.
+		this.dropContainer = nil
+		this.Self().Update()
 		return
 	}
 	dnd.SetAction(gui.DndCopy)
-	return
-	//
+
+	// Outline the container the release would nest into, so the palette drop
+	// gets the same feedback a canvas drag does. containerUnder is the resolver
+	// OnDrop picks the parent with: sharing it is what keeps the outline from
+	// promising a parent the drop then disagrees with. (nearestDropContainer is
+	// not interchangeable — its `moving` predicate exists for canvas drags,
+	// where the dragged items are excluded from their own drop target.)
+	sx, sy := this.MapToScene(x, y)
+	this.dropContainer = this.containerUnder(sx, sy)
+	this.Self().Update()
 }
 
 func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
@@ -360,6 +376,9 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	// palette would be told DndIgnore.
 	dnd.SetAction(gui.DndCopy)
 
+	// The drag is over: the container that was outlined has become the new
+	// widget's parent, and nothing is being dragged towards it any more.
+	this.dropContainer = nil
 	this.Self().Update()
 }
 
@@ -2678,11 +2697,11 @@ func (this *GedView) Draw(g paint.Painter) {
 // so a container living in a local-coordinate parent is outlined where it is
 // drawn — the same shift Selection.OnDraw applies to its decorations.
 //
-// The palette drop path has no highlight to reuse (OnDragMove only sets the
-// drag action), so this is the design's fallback accent border. Its width is in
-// millimetres, the only thing this painter's scene space can express: 0.4mm
-// reads as a target next to the 0.2mm border FakeWidget draws around itself,
-// where a zero-width pen would collapse into the same hairline as the selection
+// Both drags share this accent border: a canvas drag sets dropContainer from
+// OnMouseMove, a palette drag from OnDragMove. Its width is in millimetres,
+// the only thing this painter's scene space can express: 0.4mm reads as a
+// target next to the 0.2mm border FakeWidget draws around itself, where a
+// zero-width pen would collapse into the same hairline as the selection
 // outline.
 func (this *GedView) drawDropContainer(g paint.Painter) {
 	if this.dropContainer == nil {
