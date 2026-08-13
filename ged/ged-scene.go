@@ -39,6 +39,8 @@ type GedScene struct {
 	// Tags the design declares (标签字典), saved with it (see tag-dictionary.go).
 	tagDict         []TagDecl
 	cbDesignChanged func()
+	// Listeners added with AddDesignChangedCallback, fired after the slot.
+	designChangedList []func()
 	// Factory names the last LoadDesign had to skip. Not persisted: it
 	// describes this program's reading of the file, not the file.
 	missing []string
@@ -98,18 +100,34 @@ func (this *GedScene) SigDesignChanged(fn func()) {
 	this.cbDesignChanged = fn
 }
 
+// AddDesignChangedCallback appends a listener for the same news
+// SigDesignChanged reports. The slot above holds exactly one callback and the
+// code panel owns it (CodePanel.BindGedView), so a panel that also wants to
+// follow the design registers here instead of assigning the slot and silently
+// unplugging the 生成代码 view.
+func (this *GedScene) AddDesignChangedCallback(fn func()) {
+	if fn == nil {
+		return
+	}
+	this.designChangedList = append(this.designChangedList, fn)
+}
+
 // PushCommand runs cmd through the undo stack, then reports the design changed.
 func (this *GedScene) PushCommand(cmd gui.ICommand) {
 	this.SceneItem.PushCommand(cmd)
 	this.NotifyDesignChanged()
 }
 
-// NotifyDesignChanged fires SigDesignChanged. Undo and Redo run commands
-// backwards off the stack without pushing anything, so the paths that drive
-// them call this to report what the stack cannot.
+// NotifyDesignChanged fires SigDesignChanged, then every listener added with
+// AddDesignChangedCallback. Undo and Redo run commands backwards off the stack
+// without pushing anything, so the paths that drive them call this to report
+// what the stack cannot.
 func (this *GedScene) NotifyDesignChanged() {
 	if this.cbDesignChanged != nil {
 		this.cbDesignChanged()
+	}
+	for _, fn := range this.designChangedList {
+		fn()
 	}
 }
 

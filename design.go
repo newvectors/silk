@@ -1547,6 +1547,11 @@ var historyPanel *ged.UndoPanel
 // bindObjectTreeTo.
 var objectTree *ged.ObjectInspector
 
+// bindingsPanel is the 信号/槽 overview: every event binding of the active
+// document, bound and unbound together. Aimed at a document by
+// bindBindingsPanelTo.
+var bindingsPanel *ged.BindingsPanel
+
 // centerDock holds the design canvas and code panel tabs.
 var centerDock *gui.Dock
 
@@ -1655,6 +1660,17 @@ func bindHistoryPanelTo(gv *ged.GedView) {
 		return
 	}
 	historyPanel.SetScene(gv.GedScene())
+}
+
+// bindBindingsPanelTo aims the 信号/槽 panel at gv's design. One panel is
+// shared by every open document, so like the history panel it has to be
+// re-aimed whenever the active canvas changes; from there it follows the
+// design on its own, through the scene's design-changed listeners.
+func bindBindingsPanelTo(gv *ged.GedView) {
+	if gv == nil || bindingsPanel == nil {
+		return
+	}
+	bindingsPanel.SetScene(gv.GedScene())
 }
 
 // bindStatusBarTo makes the permanent status bar indicators follow gv instead
@@ -1867,6 +1883,10 @@ func createPanels(mainFrame *gui.Frame) {
 		historyPanel = ged.NewUndoPanel()
 		rightDockI.AddView(historyPanel)
 
+		// ─── Signal/slot bindings panel in right dock ───
+		bindingsPanel = ged.NewBindingsPanel()
+		rightDockI.AddView(bindingsPanel)
+
 		if rightDock, ok := rightDockI.(*gui.Dock); ok {
 			rightDockRef = rightDock
 			rightDock.SetActiveIndex(0)
@@ -1882,6 +1902,7 @@ func createPanels(mainFrame *gui.Frame) {
 			bindWidgetHelpTo(gv)
 			bindPropertySheetTo(gv)
 			bindHistoryPanelTo(gv)
+			bindBindingsPanelTo(gv)
 			bindStatusBarTo(gv)
 			bindObjectTreeTo(gv)
 		}
@@ -1900,6 +1921,8 @@ func createPanels(mainFrame *gui.Frame) {
 				bindPropertySheetTo(gv)
 				// Re-aim the history panel at this document's undo stack
 				bindHistoryPanelTo(gv)
+				// Re-aim the 信号/槽 panel at this document's bindings
+				bindBindingsPanelTo(gv)
 				// Rebind status bar listeners, then show this document's numbers
 				bindStatusBarTo(gv)
 				updateStatusBarInfoFor(gv)
