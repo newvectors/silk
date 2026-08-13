@@ -17,6 +17,15 @@ const (
 	TWC_CONTENT  = 0
 	TWC_EXPANDER = 1
 	TWC_ICON     = 2
+	TWC_CHECK    = 3
+)
+
+// 复选框的三种状态.
+// TVC_PARTIAL是根据子节点推导出来的中间态, 不接受外部设置.
+const (
+	TVC_UNCHECKED = 0
+	TVC_CHECKED   = 1
+	TVC_PARTIAL   = 2
 )
 
 func NewTreeView() *TreeView {
@@ -43,6 +52,11 @@ type TreeViewRow struct {
 
 	// 当前行是否被选中
 	selected bool
+
+	// 复选框状态: checked为完全勾选, partial为"子节点勾选情况不一致"的中间态,
+	// 两者互斥, 都为false即未勾选. 状态只挂在视图的行上, 不写回模型
+	checked bool
+	partial bool
 
 	// (总)行号, 随着上方结点的展开/收缩而变动
 	ri int
@@ -79,6 +93,9 @@ type TreeView struct {
 
 	// 缩进根节点, 把第一层子节点顶格
 	indentRoot bool
+
+	// 第0列是否显示复选框
+	checkBoxVisible bool
 
 	// 统一行高
 	uniformRowHeight bool
@@ -633,6 +650,14 @@ func (this *TreeView) OnLeftDown(x, y float64) {
 		return
 	}
 
+	if row != nil && detail == TWC_CHECK {
+		// 点复选框只改勾选状态: 不移动当前行, 也不激活
+		if this.rowUserCheckable(row) {
+			this.toggleRowCheck(row)
+		}
+		return
+	}
+
 	// 点击内容区: 选中该行并激活
 	if r := this.rowIndexAtScrolled(y1); r >= 0 && r < len(this.rows) {
 		this.setCurrentRow(r)
@@ -645,7 +670,8 @@ func (this *TreeView) OnLeftDown(x, y float64) {
 //	上/下   : 在可见行间上移/下移当前行, 到头/到尾时夹住
 //	右       : 折叠且有子节点 -> 展开; 已展开 -> 移到第一个子节点; 无子节点 -> 无操作
 //	左       : 已展开 -> 折叠; 否则 -> 移到父节点(若有)
-//	回车/空格: 激活当前行
+//	回车     : 激活当前行
+//	空格     : 显示复选框且当前行可勾选时翻转勾选, 否则激活当前行
 //	Home/End : 跳到第一/最后一个可见行
 func (this *TreeView) OnKeyDown(key int, repeat bool) {
 	if len(this.rows) == 0 {
@@ -665,7 +691,12 @@ func (this *TreeView) OnKeyDown(key int, repeat bool) {
 		this.moveRight()
 	case KeyLeft:
 		this.moveLeft()
-	case KeyEnter, KeySpace:
+	case KeyEnter:
+		this.activateCurrent()
+	case KeySpace:
+		if this.toggleCurrentCheck() {
+			return
+		}
 		this.activateCurrent()
 	}
 }
@@ -957,6 +988,16 @@ func (this *TreeView) hitTestScrolled(x, y float64) (row *TreeViewRow, detail in
 			return
 		}
 	}
+
+	// 复选框带: 紧挨展开器右侧的一格, 每行(含叶子)都预留, 所以不看有无子节点
+	if this.checkBoxVisible && sec.LogicIndex == 0 {
+		expandSize := this.expanderSize()
+		x0 := rect.X + this.rowIndentPx(row) + expandSize
+		if x >= x0 && x < x0+expandSize {
+			detail = TWC_CHECK
+			return
+		}
+	}
 	return
 }
 
@@ -1036,8 +1077,37 @@ func (this *TreeView) drawCol0Cell(g paint.Painter, row *TreeViewRow, x, y, w, h
 
 	x1 := x + expandSize
 	w1 := w - expandSize
+
+	// 复选框占掉展开器右侧的一格, 图标和文字整体再右移一格
+	if this.checkBoxVisible {
+		this.drawCheckBox(g, row, x1, y, expandSize, h)
+		x1 += expandSize
+		w1 -= expandSize
+	}
+
 	if w1 > 0 {
 		this.drawCellContent(g, row, 0, x1, y, w1, h)
+	}
+}
+
+// drawCheckBox 在预留的那一格里画复选框: 空框或对勾, 部分勾选时在空框上压一道横杠.
+func (this *TreeView) drawCheckBox(g paint.Painter, row *TreeViewRow, x, y, w, h float64) {
+	sz := Theme().CheckBoxSize
+	xi := x + math.Floor(0.5*(w-sz))
+	yi := y + math.Floor(0.5*(h-sz))
+
+	icon := Theme().UncheckedIcon
+	if row.checked {
+		icon = Theme().CheckedIcon
+	}
+	g.DrawIcon1(icon, xi, yi, sz, false)
+
+	if row.partial {
+		// 主题里没有"部分勾选"图标, 用一道横杠表示子节点勾选情况不一致
+		g.SetPen1(Theme().TextColor, 2)
+		yc := math.Floor(yi + 0.5*sz)
+		g.Line(xi+3, yc, xi+sz-3, yc)
+		g.Stroke()
 	}
 }
 
@@ -1070,6 +1140,162 @@ func (this *TreeView) OnHorzScroll(sender IWidget) {
 
 func (this *TreeView) rowHasChildren(row *TreeViewRow) bool {
 	return this.model.HasChildren(row.mi)
+}
+
+// IsCheckBoxVisible 第0列是否显示复选框.
+func (this *TreeView) IsCheckBoxVisible() bool {
+	return this.checkBoxVisible
+}
+
+// SetCheckBoxVisible 显示/隐藏第0列的复选框.
+// 复选框带占的是列内已有的位置, 不改变列宽和滚动条, 所以重画即可.
+func (this *TreeView) SetCheckBoxVisible(b bool) {
+	this.checkBoxVisible = b
+	this.Update()
+}
+
+// CheckState 返回一行的勾选状态: TVC_CHECKED / TVC_PARTIAL / TVC_UNCHECKED.
+func (this *TreeView) CheckState(mi ModelIndex) int {
+	row := this.checkRow(mi)
+	if row == nil {
+		return TVC_UNCHECKED
+	}
+	switch {
+	case row.partial:
+		return TVC_PARTIAL
+	case row.checked:
+		return TVC_CHECKED
+	}
+	return TVC_UNCHECKED
+}
+
+// SetCheckState 勾选/取消勾选一行: 整棵子树跟着变, 再自下而上重算各级父节点.
+// TVC_PARTIAL是推导出来的中间态, 传进来时什么也不做.
+// 这是程序接口, 不受ItemIsUserCheckable限制 -- 那个标志只挡鼠标和空格.
+func (this *TreeView) SetCheckState(mi ModelIndex, state int) {
+	if state != TVC_CHECKED && state != TVC_UNCHECKED {
+		return
+	}
+	row := this.checkRow(mi)
+	if row == nil {
+		return
+	}
+	this.setSubtreeChecked(row, state == TVC_CHECKED)
+	this.recalcParentCheckState(row)
+	this.Update()
+}
+
+// CheckedIndexes 按可见顺序返回所有完全勾选的行的模型索引, 部分勾选的不算.
+func (this *TreeView) CheckedIndexes() []ModelIndex {
+	var out []ModelIndex
+	for _, row := range this.rows {
+		if row.checked {
+			out = append(out, row.mi)
+		}
+	}
+	return out
+}
+
+// checkRow 取mi所在的行, 勾选状态挂在第0列的行对象上. 行不存在时返回nil.
+func (this *TreeView) checkRow(mi ModelIndex) *TreeViewRow {
+	if mi.IsNil() {
+		return nil
+	}
+	return this.getRow(mi.SameRow(0), false)
+}
+
+// setSubtreeChecked 把一行连同整棵子树置为同一状态.
+// 沿模型往下走而不是沿可见行走: 折叠起来的子节点也要跟着变, 否则重新展开后
+// 会出现"父节点已勾选而子节点没勾选", 下一次重算就把父节点判成部分勾选.
+func (this *TreeView) setSubtreeChecked(row *TreeViewRow, checked bool) {
+	row.checked = checked
+	row.partial = false
+
+	rc := this.model.RowCount(row.mi)
+	for i := 0; i < rc; i++ {
+		mi := this.model.Index(i, 0, row.mi)
+		if mi.IsNil() {
+			continue
+		}
+		if child := this.getRow(mi, true); child != nil {
+			this.setSubtreeChecked(child, checked)
+		}
+	}
+}
+
+// recalcParentCheckState 从row开始逐级向上重算父节点的勾选状态.
+func (this *TreeView) recalcParentCheckState(row *TreeViewRow) {
+	for {
+		parent := this.checkRow(row.mi.Parent())
+		if parent == nil {
+			return
+		}
+		parent.checked, parent.partial = this.childrenCheckState(parent)
+		row = parent
+	}
+}
+
+// childrenCheckState 按子节点的勾选情况算出父节点应有的状态:
+// 全勾选且无部分勾选 -> 勾选; 无一勾选且无部分勾选 -> 未勾选; 其余 -> 部分勾选.
+// ItemIsUserCheckable只挡用户操作, 不影响这里的统计: 不可勾选的行照样算数.
+func (this *TreeView) childrenCheckState(row *TreeViewRow) (checked, partial bool) {
+	all, none, anyPartial := true, true, false
+
+	rc := this.model.RowCount(row.mi)
+	for i := 0; i < rc; i++ {
+		mi := this.model.Index(i, 0, row.mi)
+		if mi.IsNil() {
+			continue
+		}
+		c := this.getRow(mi, false)
+		// 行还没建立起来的子节点按未勾选计
+		if c == nil || !c.checked {
+			all = false
+		} else {
+			none = false
+		}
+		if c != nil && c.partial {
+			anyPartial = true
+		}
+	}
+
+	if anyPartial {
+		return false, true
+	}
+	if all {
+		return true, false
+	}
+	if none {
+		return false, false
+	}
+	return false, true
+}
+
+// rowUserCheckable 模型是否允许用户勾选该行.
+func (this *TreeView) rowUserCheckable(row *TreeViewRow) bool {
+	return this.model.Flags(row.mi)&ItemIsUserCheckable != 0
+}
+
+// toggleRowCheck 在勾选/未勾选之间翻转一行, 部分勾选按未勾选处理(翻成勾选).
+func (this *TreeView) toggleRowCheck(row *TreeViewRow) {
+	if row.checked {
+		this.SetCheckState(row.mi, TVC_UNCHECKED)
+	} else {
+		this.SetCheckState(row.mi, TVC_CHECKED)
+	}
+}
+
+// toggleCurrentCheck 空格键用: 显示复选框且当前行可勾选时翻转它, 返回是否已处理.
+func (this *TreeView) toggleCurrentCheck() bool {
+	if !this.checkBoxVisible {
+		return false
+	}
+	row := this.getRow1(this.currentRow)
+	if row == nil || !this.rowUserCheckable(row) {
+		return false
+	}
+	this.toggleRowCheck(row)
+	return true
 }
 
 func (this *TreeView) EnumProperties(list core.IPropertyList) {
