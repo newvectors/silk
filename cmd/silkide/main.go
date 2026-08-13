@@ -1038,14 +1038,18 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 
 // editorDiffersFromDisk reports whether ed's buffer has drifted from the file
 // it was opened from. gui.CodeEditor keeps no modified flag, so the buffer is
-// compared against the bytes on disk instead. A file we can't read (deleted or
-// renamed underneath the tab) reads as "no drift" — there is nothing to
-// compare, and prompting there would only block closing tabs for files the
-// user removed on purpose.
+// compared against the bytes on disk instead. A file we can't read (deleted,
+// renamed away, unreadable, or replaced by a directory underneath the tab)
+// counts as drifted: there is no disk copy left to compare against, so the
+// buffer is by definition content that exists nowhere else. The failed read is
+// exactly what makes the two cases indistinguishable — a buffer the user never
+// touched looks the same as one full of unsaved work — and one extra dialog for
+// a file removed on purpose is cheaper than destroying the only copy of the one
+// that wasn't. An empty buffer is the single carve-out: nothing in it to lose.
 func editorDiffersFromDisk(ed *gui.CodeEditor, path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return ed.Text() != ""
 	}
 	return string(data) != ed.Text()
 }

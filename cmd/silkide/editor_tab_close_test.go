@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/uk0/silk/gui"
@@ -451,5 +452,100 @@ func TestCloseEditorTabFailedSaveKeepsTheBuffer(t *testing.T) {
 	}
 	if disk := diskText(t, path); disk != original {
 		t.Errorf("disk = %q; want the file untouched at %q", disk, original)
+	}
+}
+
+// TestCloseEditorTabUnreadableFileKeepsTheBuffer: the file behind a dirty tab
+// can stop being readable while the tab is open — deleted, renamed away, or
+// replaced by a directory. The buffer is then the only copy of that work that
+// exists anywhere, and a failed read used to report it as CLEAN: the tab closed
+// with no prompt, Cmd+Q quit over it, and restoreSession reopening the path
+// from disk made the loss read as a session restore that worked.
+func TestCloseEditorTabUnreadableFileKeepsTheBuffer(t *testing.T) {
+	const original = "package main\n"
+	const edited = "package main\n\nfunc unsavedWork() {}\n"
+
+	cases := []struct {
+		name string
+		// breakFile makes path unreadable, after the open, so the editor is
+		// holding real work when its file goes.
+		breakFile func(t *testing.T, path string)
+	}{
+		{"deleted", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"replaced by a directory", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "vanished.go")
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tabs, ed, idx := openEditedTab(t, path, edited)
+			c.breakFile(t, path)
+			asked := answerCloseDirty(t, gui.DialogCancel)
+
+			if tabs.TabBar().CloseTab(idx) {
+				t.Error("CloseTab closed a tab whose file is unreadable; the buffer was the only copy left")
+			}
+			if !*asked {
+				t.Error("closing over an unreadable file never asked about the unsaved buffer")
+			}
+			if editorTabIndex(tabs, ed) < 0 {
+				t.Error("cancelled close removed the tab anyway")
+			}
+			if got := ed.Text(); got != edited {
+				t.Errorf("editor buffer = %q; want the unsaved edit %q", got, edited)
+			}
+			// The Cmd+Q leg. Repairing the close path alone still lets quit walk
+			// over the same buffer, and just as silently — confirmQuitDirtyEditors
+			// only ever sees what dirtyEditorPaths hands it.
+			if got := dirtyEditorPaths(); !slices.Contains(got, path) {
+				t.Errorf("dirtyEditorPaths() = %v; want it to list %q so Cmd+Q asks before quitting over it", got, path)
+			}
+		})
+	}
+}
+
+// TestCloseEditorTabEmptyBufferVanishedFileClosesSilently: the carve-out. An
+// empty buffer whose file is gone has nothing in it to lose, so it must close
+// the way it always did instead of collecting a dialog on the way out.
+func TestCloseEditorTabEmptyBufferVanishedFileClosesSilently(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tabs, ed, idx := openEditedTab(t, path, "")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	asked := answerCloseDirty(t, gui.DialogCancel)
+
+	if got := dirtyEditorPaths(); slices.Contains(got, path) {
+		t.Errorf("dirtyEditorPaths() = %v; an empty buffer has nothing to save, so Cmd+Q must not stop for %q", got, path)
+	}
+	if !tabs.TabBar().CloseTab(idx) {
+		t.Fatal("CloseTab refused to close an empty buffer whose file is gone")
+	}
+	if *asked {
+		t.Error("an empty buffer was prompted about")
+	}
+	if editorTabIndex(tabs, ed) >= 0 {
+		t.Error("the tab survived close")
+	}
+	if openEditors[path] != nil {
+		t.Errorf("openEditors still tracks %q after close", path)
 	}
 }
