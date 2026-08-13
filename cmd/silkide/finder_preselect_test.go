@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"testing"
 
+	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 )
 
@@ -56,6 +58,133 @@ func TestFillFinderListWithNoMatchesSelectsNothing(t *testing.T) {
 
 	if got := list.ActiveIndex(); got != -1 {
 		t.Errorf("after filling with 0 items: ActiveIndex = %d, want -1", got)
+	}
+}
+
+// TestFillFinderListKeepsEveryRowsPayload: the label is only half a row. Each
+// finder hangs the value its handler needs off ListItem.Data and gets it back
+// with a type assertion — showCommandPalette reads .(paletteCommand),
+// showFileFinder .(fileEntry), showSymbolFinder .(core.LSPWorkspaceSymbol) —
+// and a failed assertion is silent: ok comes back false and the handler
+// returns. A fill that carried the text across and dropped Data would leave all
+// three dialogs looking alive (rows drawn, row 0 lit, ActiveIndex 0) with
+// Enter, double-click and Enter-on-the-search-field all doing nothing. So this
+// reruns each finder's own assertion over the rows fillFinderList produced.
+func TestFillFinderListKeepsEveryRowsPayload(t *testing.T) {
+	// fired records which command's Fn ran, so the palette case can prove the
+	// closure survived too — Name and Hint matching is not enough when Fn is
+	// the field that does the work.
+	fired := ""
+	cmds := []paletteCommand{
+		{Name: "Run", Hint: "F5", Fn: func() { fired = "Run" }},
+		{Name: "Build", Hint: "F6", Fn: func() { fired = "Build" }},
+	}
+	files := []fileEntry{
+		{Path: "/proj/main.go", Display: "main.go"},
+		{Path: "/proj/gui/list-widget.go", Display: "gui/list-widget.go"},
+	}
+	syms := []core.LSPWorkspaceSymbol{
+		{Name: "NewListWidget", ContainerName: "gui", URI: "file:///proj/gui/list-widget.go", Line: 240},
+		{Name: "Append", ContainerName: "ListWidget", URI: "file:///proj/gui/list-widget.go", Line: 278, Character: 22},
+	}
+
+	cases := []struct {
+		finder string // the dialog that reads these rows back
+		assert string // the assertion its handler performs on Data
+		items  []gui.ListItem
+		// check reruns that assertion on row idx of the filled list and says
+		// what is wrong with the payload, or "" when it came through intact.
+		check func(list *gui.ListWidget, idx int) string
+	}{
+		{
+			finder: "showCommandPalette",
+			assert: "list.Item(idx).Data.(paletteCommand)",
+			items: []gui.ListItem{
+				{Text: "Run    F5", Data: cmds[0]},
+				{Text: "Build    F6", Data: cmds[1]},
+			},
+			check: func(list *gui.ListWidget, idx int) string {
+				cmd, ok := list.Item(idx).Data.(paletteCommand)
+				if !ok {
+					return fmt.Sprintf("Data is %T, not a paletteCommand", list.Item(idx).Data)
+				}
+				if cmd.Name != cmds[idx].Name || cmd.Hint != cmds[idx].Hint {
+					return fmt.Sprintf("Data is command %q (%q), want %q (%q)",
+						cmd.Name, cmd.Hint, cmds[idx].Name, cmds[idx].Hint)
+				}
+				fired = ""
+				cmd.Fn()
+				if fired != cmds[idx].Name {
+					return fmt.Sprintf("running the command fired %q, want %q", fired, cmds[idx].Name)
+				}
+				return ""
+			},
+		},
+		{
+			finder: "showFileFinder",
+			assert: "list.Item(idx).Data.(fileEntry)",
+			items: []gui.ListItem{
+				{Text: files[0].Display, Data: files[0]},
+				{Text: files[1].Display, Data: files[1]},
+			},
+			check: func(list *gui.ListWidget, idx int) string {
+				f, ok := list.Item(idx).Data.(fileEntry)
+				if !ok {
+					return fmt.Sprintf("Data is %T, not a fileEntry", list.Item(idx).Data)
+				}
+				if f != files[idx] {
+					return fmt.Sprintf("Data is %+v, want %+v", f, files[idx])
+				}
+				return ""
+			},
+		},
+		{
+			finder: "showSymbolFinder",
+			assert: "list.Item(idx).Data.(core.LSPWorkspaceSymbol)",
+			items: []gui.ListItem{
+				{Text: "gui.NewListWidget", Data: syms[0]},
+				{Text: "ListWidget.Append", Data: syms[1]},
+			},
+			check: func(list *gui.ListWidget, idx int) string {
+				s, ok := list.Item(idx).Data.(core.LSPWorkspaceSymbol)
+				if !ok {
+					return fmt.Sprintf("Data is %T, not a core.LSPWorkspaceSymbol", list.Item(idx).Data)
+				}
+				if s != syms[idx] {
+					return fmt.Sprintf("Data is %+v, want %+v", s, syms[idx])
+				}
+				return ""
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.finder, func(t *testing.T) {
+			list := gui.NewListWidget()
+			fillFinderList(list, tc.items)
+
+			if got, want := list.Count(), len(tc.items); got != want {
+				t.Fatalf("fill left %d rows, want %d", got, want)
+			}
+			for idx := range tc.items {
+				if bad := tc.check(list, idx); bad != "" {
+					t.Errorf("row %d (%q): %s; %s reads %s and returns without doing anything when that fails",
+						idx, list.Item(idx).Text, bad, tc.finder, tc.assert)
+				}
+			}
+
+			// Enter and double-click both run whatever row is selected, so the
+			// payload has to be intact at *that* index — a fill that preserved
+			// every payload but came back with nothing selected is the same
+			// dead Enter reached from the other side.
+			idx := list.ActiveIndex()
+			if idx < 0 || idx >= list.Count() {
+				t.Fatalf("nothing selected after the fill (ActiveIndex = %d); %s reads that index", idx, tc.finder)
+			}
+			if bad := tc.check(list, idx); bad != "" {
+				t.Errorf("selected row %d (%q) is the one Enter runs: %s", idx, list.Item(idx).Text, bad)
+			}
+		})
 	}
 }
 
