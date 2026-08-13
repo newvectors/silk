@@ -171,3 +171,114 @@ func TestAlignHCenterWithOneFreeMoverIsANoOp(t *testing.T) {
 			couldUndo, view.Scene().UndoStack().CanUndo())
 	}
 }
+
+// TestAlignHCenterWithEveryMoverLockedIsANoOp is one widget past the case
+// above, and the end of the filter's road: pin EVERY selected widget and the
+// free-rect slice comes out empty, so the mean is asked of nothing at all.
+// alignRects hands an empty slice straight back under its len < 2 guard,
+// nobody gets a target, and the empty command is dropped — which is the only
+// answer available, since the only widgets that could move are all pinned.
+//
+// It is spelled out because reaching that answer means NOT reading a rect the
+// filter did not produce. Every other centre test here leaves one or two
+// widgets free, so the slice always had something at index 0 and an unguarded
+// read of it would go unseen.
+func TestAlignHCenterWithEveryMoverLockedIsANoOp(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("水平居中对齐 panicked with every selected widget 位置锁定: %v — "+
+				"the mean is taken over an empty free-rect slice, which has no rect to read", r)
+		}
+	}()
+
+	view := NewGedView()
+	scene := view.GedScene()
+	scene.SetSize(400, 400)
+
+	// The fixture the centre tests above use, with all three pinned instead of
+	// just the leftmost.
+	a := addFakeAt(t, scene, "a", 5, 5, 10, 4)
+	b := addFakeAt(t, scene, "b", 90, 5, 20, 4)
+	c := addFakeAt(t, scene, "c", 115, 5, 30, 4)
+	for _, w := range []*FakeWidget{a, b, c} {
+		w.SetLockPos(true)
+	}
+
+	view.Selection().Clear()
+	for _, w := range []*FakeWidget{a, b, c} {
+		view.Selection().Add(w)
+	}
+
+	before := view.Scene().UndoStack().Count()
+	couldUndo := view.Scene().UndoStack().CanUndo()
+	view.AlignSelection(AlignHCenter)
+
+	want := []float64{5, 90, 115}
+	for i, w := range []*FakeWidget{a, b, c} {
+		if x, y := w.Pos(); x != want[i] || y != 5 {
+			t.Errorf("%s sits at (%g,%g) after 水平居中对齐 with the whole selection 位置锁定, "+
+				"want (%g,5) — there is no widget left to swing onto a line", w.WidgetName(), x, y, want[i])
+		}
+	}
+	if got := view.Scene().UndoStack().Count() - before; got != 0 {
+		t.Errorf("all-locked 水平居中对齐 pushed %d command(s); Ctrl+Z would burn a step on nothing", got)
+	}
+	if view.Scene().UndoStack().CanUndo() != couldUndo {
+		t.Errorf("all-locked 水平居中对齐 changed CanUndo() from %v to %v",
+			couldUndo, view.Scene().UndoStack().CanUndo())
+	}
+}
+
+// TestAlignHCenterMeanExcludesLockedAndCarriedAtOnce puts both exclusions in
+// one selection, which is the only place their order can be seen: the locked
+// widget is filtered out of the mean here, the carried child was already out
+// of the movers the filter reads, and a filter that reached back past the
+// movers to the full selection would hand the child its vote back.
+//
+// TestAlignHCenterMeanExcludesCarriedChild has the child without a lock and
+// the tests above have the lock without a child, so each of them passes on a
+// mean that is wrong by the other rule.
+func TestAlignHCenterMeanExcludesLockedAndCarriedAtOnce(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+	scene.SetSize(400, 200)
+
+	box := newAlignBox(t, scene, "box", 10, 20, 20, 30)
+	inside := addFakeAt(t, scene, "inside", 12, 25, 4, 2)
+	inside.SetParent(box)
+	free := addFakeAt(t, scene, "free", 90, 60, 40, 10)
+	locked := addFakeAt(t, scene, "locked", 200, 80, 40, 10)
+	locked.SetLockPos(true)
+
+	view.Selection().Clear()
+	for _, w := range []*FakeWidget{box, inside, free, locked} {
+		view.Selection().Add(w)
+	}
+
+	view.AlignSelection(AlignHCenter)
+
+	// Two of the four rects survive both exclusions: the container's centre of
+	// 20 and the free widget's of 110, so the line is 65. The child's 14 drags
+	// it down to 48; the pinned widget's 220 pushes it up past 116.
+	const wantCX = 65.0
+	bx, _ := box.Pos()
+	bw, _ := box.Size()
+	if cx := bx + bw/2; cx != wantCX {
+		t.Errorf("container centre = %g after 水平居中对齐, want %g — the mean is over the container "+
+			"and the free widget, not over the child riding inside it or the pinned widget", cx, wantCX)
+	}
+	fx, _ := free.Pos()
+	fw, _ := free.Size()
+	if cx := fx + fw/2; cx != wantCX {
+		t.Errorf("free widget centre = %g after 水平居中对齐, want %g — same line, placed by its own "+
+			"half-width", cx, wantCX)
+	}
+	// Carried, at the offset it had: 12 - 10 = 2.
+	if ix, _ := inside.Pos(); ix-bx != 2 {
+		t.Errorf("widget inside the container sits at %g with the container at %g: offset %g, want 2",
+			ix, bx, ix-bx)
+	}
+	if x, y := locked.Pos(); x != 200 || y != 80 {
+		t.Errorf("位置锁定 widget moved to (%g,%g), want (200,80)", x, y)
+	}
+}
