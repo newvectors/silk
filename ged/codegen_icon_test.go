@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 )
@@ -13,26 +14,42 @@ import (
 // "props" block, and codegen emits the SetIconName call that reproduces it.
 // This file covers the two ends persistence and generation own.
 
-// newIconScene builds the one-button scene both codegen assertions generate
-// from. iconName "" leaves the button as dragged.
-func newIconScene(t *testing.T, widgetName, iconName string) *GedScene {
+// unmappedIconFactory is a Button registered under a name ged's factoryMap does
+// not know. A widget like that degrades to a gui.IWidget field (see
+// interfaceGoType), an interface with no SetIconName, so the icon emission has
+// to skip it however loudly the widget answers IconName(). No shipped widget is
+// both icon-bearing and unmapped today — this fixture is what keeps the first
+// one that is from generating a file the user cannot build.
+const unmappedIconFactory = "gedtest.IconWidget"
+
+type unmappedIconWidget struct {
+	gui.Button
+}
+
+func init() {
+	core.RegisterFactory(unmappedIconFactory, core.TypeOf((*unmappedIconWidget)(nil)))
+}
+
+// newIconScene builds the one-widget scene the codegen assertions generate
+// from. iconName "" leaves the widget as dragged.
+func newIconScene(t *testing.T, factory, widgetName, iconName string) *GedScene {
 	t.Helper()
 	scene := NewGedScene()
 	scene.SetFormTitle("IconForm")
 	scene.SetSize(100, 80)
 
-	fake, err := NewFakeWidgetFromFactory("gui.Button")
+	fake, err := NewFakeWidgetFromFactory(factory)
 	if err != nil {
-		t.Fatal("failed to create button:", err)
+		t.Fatalf("failed to create %s: %v", factory, err)
 	}
 	fake.SetWidgetName(widgetName)
 	fake.SetBounds(5, 5, 25, 7)
 	if iconName != "" {
-		btn, ok := fake.Widget().(*gui.Button)
+		named, ok := fake.Widget().(interface{ SetIconName(string) })
 		if !ok {
-			t.Fatalf("factory gui.Button produced %T, want *gui.Button", fake.Widget())
+			t.Fatalf("factory %s produced %T, which has no SetIconName", factory, fake.Widget())
 		}
-		btn.SetIconName(iconName)
+		named.SetIconName(iconName)
 	}
 	cmd := graph.NewAddCommand()
 	cmd.AddItem(fake, scene)
@@ -77,7 +94,7 @@ func TestButtonIconNameRoundTrip(t *testing.T) {
 // TestGenerateCodeButtonIconName: a designed icon comes out as the one call
 // that reproduces it.
 func TestGenerateCodeButtonIconName(t *testing.T) {
-	scene := newIconScene(t, "btnSave", "save")
+	scene := newIconScene(t, "gui.Button", "btnSave", "save")
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "IconFormUI"})
 
 	want := "\tui.BtnSave.SetIconName(\"save\")\n"
@@ -130,10 +147,42 @@ func main() {
 `
 
 func TestGenerateCodeButtonWithoutIconName(t *testing.T) {
-	scene := newIconScene(t, "btnPlain", "")
+	scene := newIconScene(t, "gui.Button", "btnPlain", "")
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "IconFormUI"})
 
 	if code != buttonNoIconGolden {
 		t.Errorf("a button with no icon changed the generated output\n--- got ---\n%s\n--- want ---\n%s", code, buttonNoIconGolden)
 	}
+}
+
+// TestGenerateCodeUnmappedWidgetKeepsItsIconUnemitted: an icon-bearing widget
+// whose factory codegen has no mapping for holds its name just as a Button
+// does, but its field is declared gui.IWidget — the emission has to stay
+// silent, because gui.IWidget has no SetIconName and the call would not
+// compile. This is the same shape as the CodeEditor event binding that used to
+// be emitted against a degraded field (see codegen_compile_test.go).
+func TestGenerateCodeUnmappedWidgetKeepsItsIconUnemitted(t *testing.T) {
+	scene := newIconScene(t, unmappedIconFactory, "iconBtn", "build")
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "IconFormUI"})
+
+	if !hasStructField(code, "IconBtn", interfaceGoType) {
+		t.Fatalf("fixture is not exercising the degraded path: IconBtn is not declared %s\n----\n%s", interfaceGoType, code)
+	}
+	if strings.Contains(code, "ui.IconBtn.SetIconName(") {
+		t.Errorf("icon emitted against the %s field IconBtn; %s has no SetIconName, so the generated file does not compile\n----\n%s",
+			interfaceGoType, interfaceGoType, code)
+	}
+}
+
+// TestCodeGenUnmappedIconWidgetCompiles is the assertion above stated as the
+// consequence: go vet type-checks the generated module, so an icon call emitted
+// against a gui.IWidget field is reported by the compiler's own message rather
+// than by a string match this file has to keep in sync.
+func TestCodeGenUnmappedIconWidgetCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	scene := newIconScene(t, unmappedIconFactory, "iconBtn", "build")
+	vetGeneratedCode(t, scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "IconFormUI"}))
 }
