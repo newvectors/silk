@@ -355,3 +355,103 @@ func TestGedViewDropLandsInTheHighlightedContainer(t *testing.T) {
 		t.Errorf("dropContainer after the drop = %v, want nil — the outline stays on the canvas after the drag ended", view.dropContainer)
 	}
 }
+
+// newEdgeDropFixture builds the one geometry newDropFixture cannot express: a
+// VBox whose vertical edges sit at 61 and 141, off the 5mm grid, so a cursor
+// within half a pitch of an edge snaps ACROSS it. At (61.5,40) the cursor is
+// inside the box while the snapped placement (60,40) is outside; at (141.5,40)
+// it is the other way round. Those are the samples that tell "resolved from the
+// cursor" apart from "resolved from the placement" — at the box's centre, where
+// the other drop tests aim, the two answers coincide and neither is under test.
+func newEdgeDropFixture(t *testing.T) (*GedView, *GedScene, *FakeWidget) {
+	t.Helper()
+	view := NewGedView()
+	scene := view.GedScene()
+	scene.SetSize(200, 150)
+	return view, scene, sceneWidget(t, scene, "gui.VBox", "box", 61, 10, 80, 60)
+}
+
+// checkSampleSeparatesCursorFromPlacement is the premise every edge sample
+// below rests on: containerUnder answers differently for the cursor and for the
+// grid-snapped placement. Without it a test at this point would hold for a
+// resolver reading either one, which is exactly how the centre-of-box sample
+// let the two decisions pass for one.
+func checkSampleSeparatesCursorFromPlacement(t *testing.T, view *GedView, sx, sy float64) (float64, float64) {
+	t.Helper()
+	gx, gy := view.snapToGrid(sx, sy)
+	if a, b := view.containerUnder(sx, sy), view.containerUnder(gx, gy); a == b {
+		t.Fatalf("cursor (%v,%v) and snapped placement (%v,%v) both resolve to %v — this sample cannot tell the two apart", sx, sy, gx, gy, a)
+	}
+	return gx, gy
+}
+
+// TestGedViewDragHighlightAndDropFollowTheCursorAtAContainerEdge drops half a
+// pitch inside the box's left edge, where the widget's snapped resting place
+// lands outside the box. Both halves of the gesture have to answer from the
+// cursor: the outline names the container, and OnDrop parents the new widget
+// into that same container.
+//
+// The regression it catches is a highlight resolved at the point the widget is
+// PLACED — `this.dropContainer = this.containerUnder(this.snapToGrid(sx, sy))`.
+// That reads correctly at a container's centre and goes dark in a band half a
+// pitch wide along every edge, while OnDrop still nests the widget into the
+// container the outline stopped promising.
+func TestGedViewDragHighlightAndDropFollowTheCursorAtAContainerEdge(t *testing.T) {
+	view, scene, vbox := newEdgeDropFixture(t)
+	const sx, sy = 61.5, 40.0
+	gx, gy := checkSampleSeparatesCursorFromPlacement(t, view, sx, sy)
+
+	ctx := &dropCtx{pa: gui.DndCopy, payload: "gui.Button"}
+	dragMoveOverScene(view, ctx, sx, sy)
+	if view.dropContainer != graph.IItem(vbox) {
+		t.Fatalf("dropContainer %.1fmm inside the box's left edge = %v, want the box — the outline is being read off the snapped placement (%v,%v), which is outside it", sx-vbox.X(), view.dropContainer, gx, gy)
+	}
+
+	before := collectItems(scene, nil)
+	vx, vy := view.MapFromScene(sx, sy)
+	ctx.SetAction(gui.DndIgnore)
+	view.OnDrop(vx, vy, ctx)
+
+	added := itemsAddedTo(scene, before)
+	if len(added) != 1 {
+		t.Fatalf("items created by the drop = %d, want 1", len(added))
+	}
+	if got := added[0].Parent(); got != graph.IItem(vbox) {
+		t.Errorf("parent of the widget dropped at (%v,%v) = %v, want the box the drag outlined", sx, sy, got)
+	}
+}
+
+// TestGedViewDropWithNoHighlightLandsOnTheFormRoot ties the "no outline"
+// promise to where the widget actually arrives: nothing outlined means the form
+// root owns it. The cursor is half a pitch OUTSIDE the box's right edge, so the
+// snapped placement (140,40) is inside the box — the mirror of the sample
+// above, and the one that makes the nil answer a claim rather than a default.
+//
+// The regression it catches is the same misplaced resolver seen from the other
+// side: a highlight taken from the snapped placement outlines a box the cursor
+// never entered, and a parent taken from there nests the widget into it while
+// the canvas showed no outline at all.
+func TestGedViewDropWithNoHighlightLandsOnTheFormRoot(t *testing.T) {
+	view, scene, vbox := newEdgeDropFixture(t)
+	const sx, sy = 141.5, 40.0
+	gx, gy := checkSampleSeparatesCursorFromPlacement(t, view, sx, sy)
+
+	ctx := &dropCtx{pa: gui.DndCopy, payload: "gui.Button"}
+	dragMoveOverScene(view, ctx, sx, sy)
+	if view.dropContainer != nil {
+		t.Fatalf("dropContainer %.1fmm outside the box's right edge (%v) = %v, want nil — the canvas outlines a box the cursor is not over, from the snapped placement (%v,%v)", sx-(vbox.X()+vbox.Width()), vbox.X()+vbox.Width(), view.dropContainer, gx, gy)
+	}
+
+	before := collectItems(scene, nil)
+	vx, vy := view.MapFromScene(sx, sy)
+	ctx.SetAction(gui.DndIgnore)
+	view.OnDrop(vx, vy, ctx)
+
+	added := itemsAddedTo(scene, before)
+	if len(added) != 1 {
+		t.Fatalf("items created by the drop = %d, want 1", len(added))
+	}
+	if got := added[0].Parent(); got != graph.IItem(scene) {
+		t.Errorf("parent of the widget dropped with no container outlined = %v, want the form root — the drag promised the root and the drop nested it anyway", got)
+	}
+}
