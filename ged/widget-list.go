@@ -37,12 +37,18 @@ func NewWidgetList() *WidgetList {
 	return p
 }
 
-// categoryDefs defines which factory names belong in each category.
-// The order here determines display order.
-var categoryDefs = []struct {
+// widgetCategoryDef is one palette category: its display name and the factory
+// names it lists. Named rather than anonymous so RegisterWidget
+// (ged/widget-plugin.go) can append an entry for a category a plugin brings
+// with it.
+type widgetCategoryDef struct {
 	name  string
 	names []string
-}{
+}
+
+// categoryDefs defines which factory names belong in each category.
+// The order here determines display order.
+var categoryDefs = []widgetCategoryDef{
 	{
 		name:  "输入控件 (Input)",
 		names: []string{"gui.Button", "gui.Edit", "gui.TextArea", "gui.CheckBox", "gui.RadioButton", "gui.ComboBox", "gui.SpinBox", "gui.Slider", "gui.ToggleSwitch", "gui.SearchBox", "gui.NumberInput", "gui.DatePicker", "gui.Calendar", "gui.TimePicker", "gui.ColorPicker", "gui.Rating", "gui.DropdownButton", "gui.SwitchGroup", "gui.PathEdit"},

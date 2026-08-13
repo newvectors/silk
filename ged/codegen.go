@@ -1015,6 +1015,9 @@ func AvailableEvents(factoryName string) []string {
 // default get one new line here plus the matching case in
 // emitEventBinding — both checked by the existing tests.
 func defaultEventForFactory(factoryName string) string {
+	if e, ok := pluginDefaultEvents[factoryName]; ok {
+		return e
+	}
 	switch factoryName {
 	case "gui.Button", "gui.Link":
 		return "OnClick"
