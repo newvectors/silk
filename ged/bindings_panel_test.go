@@ -225,6 +225,76 @@ func TestBindingsPanelDoesNotStealTheDesignSlot(t *testing.T) {
 	}
 }
 
+// bindingsRebuildCounter is a BindingsPanel that counts what a design change
+// costs it. Rebuild ends in Self().Update(), and in the case below nothing else
+// asks the panel to repaint, so the count is the number of rebuilds one pushed
+// command produced.
+type bindingsRebuildCounter struct {
+	BindingsPanel
+	updates int
+}
+
+func (this *bindingsRebuildCounter) Update() { this.updates++ }
+
+func newBindingsRebuildCounter() *bindingsRebuildCounter {
+	p := new(bindingsRebuildCounter)
+	p.Init(p)
+	return p
+}
+
+// pushAddedWidget adds a widget to scene through a command on its stack — the
+// path a drop, a paste and their undo/redo all share, and the one that reports
+// the design changed.
+func pushAddedWidget(t *testing.T, scene *GedScene, factory, name string) *FakeWidget {
+	t.Helper()
+	fake, err := NewFakeWidgetFromFactory(factory)
+	if err != nil {
+		t.Fatalf("create %s: %v", factory, err)
+	}
+	fake.SetWidgetName(name)
+	fake.SetBounds(10, 120, 40, 8)
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(fake, scene)
+	scene.PushCommand(cmd)
+	return fake
+}
+
+// TestBindingsPanelListensOnlyToTheDesignItShows counts the subscriptions from
+// the far end. The panel is a singleton the tab change re-aims, so a
+// subscription taken per SetScene accumulates: two visits to a design leave
+// every edit there rebuilding the panel twice, three visits three times, for as
+// long as the session lasts — and a design the user has switched away from goes
+// on driving a panel that shows another document.
+func TestBindingsPanelListensOnlyToTheDesignItShows(t *testing.T) {
+	first := newBindingsFixture(t)
+	second := newBindingsFixture(t)
+	panel := newBindingsRebuildCounter()
+
+	panel.SetScene(first.scene)
+	panel.SetScene(second.scene)
+
+	// An edit on the design the panel was re-aimed away from — an undo on a
+	// background tab, a property edit from the object tree — is no longer its
+	// business.
+	panel.updates = 0
+	pushAddedWidget(t, first.scene, "gui.CheckBox", "chkBackground")
+	if panel.updates != 0 {
+		t.Errorf("a command on the design the panel was re-aimed away from rebuilt it %d time(s), want 0 — SetScene left the old subscription live", panel.updates)
+	}
+
+	// Re-aimed back, one command must cost exactly one rebuild, not one per
+	// visit the panel has paid this design.
+	panel.SetScene(first.scene)
+	panel.updates = 0
+	pushAddedWidget(t, first.scene, "gui.CheckBox", "chkAgree")
+	if panel.updates != 1 {
+		t.Errorf("back on the first design one command rebuilt the panel %d time(s), want 1 — SetScene subscribes again without dropping the subscription it already held", panel.updates)
+	}
+	if rowIndexOf(&panel.BindingsPanel, "chkAgree", "OnToggled") < 0 {
+		t.Errorf("the widget added after re-aiming back is not listed: %+v", panel.Rows())
+	}
+}
+
 // TestBindingsPanelPressReportsTheWidget: pressing a row hands the caller the
 // widget that row describes — the identical item, not one found by name. Both
 // presses are rows a naive implementation gets wrong: a nested widget's row,

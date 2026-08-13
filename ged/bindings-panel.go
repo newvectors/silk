@@ -54,7 +54,9 @@ type BindingsPanel struct {
 	gui.Widget
 
 	scene *GedScene
-	rows  []BindingRow
+	// Subscription id on scene's design-changed list, 0 when bound to nothing.
+	sub  int
+	rows []BindingRow
 	// items[i] is the widget row i describes, so a press can hand the caller
 	// the item rather than a name it would have to look up again.
 	items       []graph.IItem
@@ -89,10 +91,19 @@ func (this *BindingsPanel) contentTop() float64 {
 // SetScene binds the panel to a design and lists its bindings. It subscribes
 // through AddDesignChangedCallback rather than SigDesignChanged: that slot
 // holds one callback and the code panel owns it.
+//
+// The previous subscription is dropped first. One panel is shared by every open
+// document and design.go's bindBindingsPanelTo re-aims it on every tab change,
+// so subscribing per call would leave the panel listening to every design the
+// session has visited — once more for each time the user came back to it.
 func (this *BindingsPanel) SetScene(scene *GedScene) {
+	if this.scene != nil {
+		this.scene.RemoveDesignChangedCallback(this.sub)
+	}
+	this.sub = 0
 	this.scene = scene
 	if scene != nil {
-		scene.AddDesignChangedCallback(this.Rebuild)
+		this.sub = scene.AddDesignChangedCallback(this.Rebuild)
 	}
 	this.Rebuild()
 }

@@ -40,7 +40,10 @@ type GedScene struct {
 	tagDict         []TagDecl
 	cbDesignChanged func()
 	// Listeners added with AddDesignChangedCallback, fired after the slot.
-	designChangedList []func()
+	designChangedList []designChangedListener
+	// Ids handed out by AddDesignChangedCallback. Counts from 1, so a caller
+	// holding the zero value is subscribed to nothing.
+	designChangedSeq int
 	// Factory names the last LoadDesign had to skip. Not persisted: it
 	// describes this program's reading of the file, not the file.
 	missing []string
@@ -100,16 +103,45 @@ func (this *GedScene) SigDesignChanged(fn func()) {
 	this.cbDesignChanged = fn
 }
 
+// designChangedListener is one AddDesignChangedCallback subscription. It
+// carries an id because func values are not comparable: a listener cannot be
+// found again by the function it holds.
+type designChangedListener struct {
+	id int
+	fn func()
+}
+
 // AddDesignChangedCallback appends a listener for the same news
-// SigDesignChanged reports. The slot above holds exactly one callback and the
-// code panel owns it (CodePanel.BindGedView), so a panel that also wants to
-// follow the design registers here instead of assigning the slot and silently
-// unplugging the 生成代码 view.
-func (this *GedScene) AddDesignChangedCallback(fn func()) {
+// SigDesignChanged reports and returns the id RemoveDesignChangedCallback
+// takes. The slot above holds exactly one callback and the code panel owns it
+// (CodePanel.BindGedView), so a panel that also wants to follow the design
+// registers here instead of assigning the slot and silently unplugging the
+// 生成代码 view.
+func (this *GedScene) AddDesignChangedCallback(fn func()) int {
 	if fn == nil {
-		return
+		return 0
 	}
-	this.designChangedList = append(this.designChangedList, fn)
+	this.designChangedSeq++
+	this.designChangedList = append(this.designChangedList,
+		designChangedListener{id: this.designChangedSeq, fn: fn})
+	return this.designChangedSeq
+}
+
+// RemoveDesignChangedCallback drops the listener with the given id, and ignores
+// an id that is not on the list (0, or one already removed).
+//
+// A tool panel shared by every open document is re-aimed by dropping its old
+// subscription and taking a new one. Without that it collects one listener per
+// visit: come back to a design twice and every edit there rebuilds the panel
+// twice, and a design the user has left keeps driving a panel that no longer
+// shows it.
+func (this *GedScene) RemoveDesignChangedCallback(id int) {
+	for i, l := range this.designChangedList {
+		if l.id == id {
+			this.designChangedList = append(this.designChangedList[:i], this.designChangedList[i+1:]...)
+			return
+		}
+	}
 }
 
 // PushCommand runs cmd through the undo stack, then reports the design changed.
@@ -126,8 +158,8 @@ func (this *GedScene) NotifyDesignChanged() {
 	if this.cbDesignChanged != nil {
 		this.cbDesignChanged()
 	}
-	for _, fn := range this.designChangedList {
-		fn()
+	for _, l := range this.designChangedList {
+		l.fn()
 	}
 }
 

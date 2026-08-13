@@ -39,6 +39,58 @@ func TestBindingsPanelFollowsTheActiveDocument(t *testing.T) {
 	}
 }
 
+// TestBindingsPanelKeepsFollowingAfterTheReAim crosses the two halves the suite
+// covered apart: the live refresh (one panel, one design, a command pushed) and
+// the re-aim (the panel pointed at a second design, its rows read). The crossing
+// is the ordinary session — switch tabs, then edit — and it is what tells a
+// panel that follows the active document from one that subscribes to the
+// design-changed list once and then lists the first document opened forever.
+//
+// The second half switches back and edits there, which the tab-change callback
+// does on every return visit: the re-aim has to leave exactly the current
+// document driving the panel, whether or not the panel has shown it before.
+func TestBindingsPanelKeepsFollowingAfterTheReAim(t *testing.T) {
+	bindingsPanel = ged.NewBindingsPanel()
+	defer func() { bindingsPanel = nil }()
+
+	first := ged.NewGedView()
+	second := ged.NewGedView()
+	dropWidget(t, first, "gui.Button")
+
+	bindBindingsPanelTo(first)
+	bindBindingsPanelTo(second)
+
+	// The tab change happened, and now the user edits the document they
+	// switched to.
+	dropWidget(t, second, "gui.Edit")
+	if got := bindingRowKeys(); len(got) != 1 || got[0] != "gui.Edit/OnChanged" {
+		t.Fatalf("after the drop on the re-aimed document the panel lists %v, want [gui.Edit/OnChanged] — it never heard the command", got)
+	}
+
+	// Back to the first tab, and an edit there.
+	bindBindingsPanelTo(first)
+	if got := bindingRowKeys(); len(got) != 1 || got[0] != "gui.Button/OnClick" {
+		t.Fatalf("re-aimed back the panel lists %v, want the first document's [gui.Button/OnClick]", got)
+	}
+	dropWidget(t, first, "gui.CheckBox")
+	want := []string{"gui.Button/OnClick", "gui.CheckBox/OnToggled"}
+	got := bindingRowKeys()
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("after the drop on the first document the panel lists %v, want %v — the re-aim back left it deaf", got, want)
+	}
+}
+
+// bindingRowKeys is the panel's content as "factory/event" strings, the shape
+// the assertions above compare.
+func bindingRowKeys() []string {
+	rows := bindingsPanel.Rows()
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, row.Factory+"/"+row.Event)
+	}
+	return keys
+}
+
 // TestBindingsPanelIsDockedAndRebound reads createPanels because it needs a
 // live frame to run. The panel has to be created and docked, and
 // bindBindingsPanelTo has to be called both at startup and from the tab-change
