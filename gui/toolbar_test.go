@@ -1,0 +1,246 @@
+package gui
+
+import "testing"
+
+// toolBarLabels are one glyph each on purpose: the text-only button formula is
+// text width + margins, so short labels put several buttons inside the narrow
+// widths these tests lay out at. Wider labels would push every item into the
+// overflow at 120 px and the prefix/suffix assertions would stop distinguishing
+// a working split from "everything disappeared".
+var toolBarLabels = []string{"A", "B", "C", "D", "E", "F"}
+
+// newLabelToolBar builds a toolbar of text-only buttons and a counter per
+// button, incremented by that button's own action.
+func newLabelToolBar() (*ToolBar, []int) {
+	tb := NewToolBar()
+	fired := make([]int, len(toolBarLabels))
+	for i, s := range toolBarLabels {
+		idx := i
+		tb.AddAction(s, nil, func() { fired[idx]++ })
+	}
+	return tb, fired
+}
+
+// visibleToolBarTexts returns the texts of the items the layout actually placed,
+// in order.
+func visibleToolBarTexts(tb *ToolBar) []string {
+	var out []string
+	for _, item := range tb.Items() {
+		if item.IsVisible() {
+			out = append(out, item.(*Button).Text())
+		}
+	}
+	return out
+}
+
+// overflowToolBarTexts returns the texts of the items handed to the chevron.
+func overflowToolBarTexts(tb *ToolBar) []string {
+	var out []string
+	for _, item := range tb.OverflowItems() {
+		out = append(out, item.(*Button).Text())
+	}
+	return out
+}
+
+func sameTexts(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestToolBarWideLayoutPlacesEveryItem pins the case the overflow must not
+// disturb: when the run fits, nothing is hidden, nothing is reordered, and no
+// chevron eats space. A split computed from the wrong budget — or one that
+// always reserves the chevron — shows up here as a missing last item.
+func TestToolBarWideLayoutPlacesEveryItem(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	tb.SetBounds(0, 0, 1000, 32)
+	tb.Layout()
+
+	if got := len(tb.OverflowItems()); got != 0 {
+		t.Errorf("1000 px bar overflowed %d item(s) (%v); every item fits and the chevron should not appear",
+			got, overflowToolBarTexts(tb))
+	}
+	if got := visibleToolBarTexts(tb); !sameTexts(got, toolBarLabels) {
+		t.Errorf("visible items = %v, want all of %v", got, toolBarLabels)
+	}
+	prev := -1.0
+	for i, item := range tb.Items() {
+		x, _, _, _ := item.Bounds()
+		if x <= prev {
+			t.Errorf("item %d (%q) placed at x=%v, which is not right of the previous item's x=%v",
+				i, item.(*Button).Text(), x, prev)
+		}
+		prev = x
+	}
+}
+
+// TestToolBarNarrowLayoutCutsTheRunAndReservesTheChevron is the bug itself: at
+// 120 px the trailing actions used to be placed past the widget's right edge —
+// invisible, unclickable, unreachable. It also pins the reservation: without
+// `- ovW - spacing` in the budget the last placed item runs under the chevron
+// and covers the only way to reach the ones that are hidden.
+func TestToolBarNarrowLayoutCutsTheRunAndReservesTheChevron(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	tb.SetBounds(0, 0, 120, 32)
+	tb.Layout()
+
+	vis := visibleToolBarTexts(tb)
+	if len(vis) == 0 {
+		t.Fatalf("120 px bar placed nothing; the fixture no longer exercises a split")
+	}
+	if !sameTexts(vis, toolBarLabels[:len(vis)]) {
+		t.Fatalf("visible items = %v, want the first %d of %v; the layout dropped or reordered items",
+			vis, len(vis), toolBarLabels)
+	}
+	if got, want := overflowToolBarTexts(tb), toolBarLabels[len(vis):]; !sameTexts(got, want) {
+		t.Errorf("overflow items = %v, want exactly the items that were not placed, %v", got, want)
+	}
+	for _, item := range tb.OverflowItems() {
+		if item.IsVisible() {
+			t.Errorf("overflowed item %q is still visible; it would draw at its stale position",
+				item.(*Button).Text())
+		}
+	}
+
+	chevron := tb.overflowButton()
+	if !chevron.IsVisible() {
+		t.Fatal("items overflowed but the chevron is hidden; the hidden actions cannot be reached")
+	}
+	cx, _, cw, _ := chevron.Bounds()
+	if cx+cw > 120 {
+		t.Errorf("chevron ends at x=%v, past the 120 px bar; it is clipped", cx+cw)
+	}
+	last := tb.Items()[len(vis)-1]
+	lx, _, lw, _ := last.Bounds()
+	if lx+lw > cx {
+		t.Errorf("last placed item %q ends at x=%v but the chevron starts at x=%v; the chevron sits on top of it",
+			last.(*Button).Text(), lx+lw, cx)
+	}
+}
+
+// TestToolBarOverflowShrinksAsTheBarGrows lays the same toolbar out at two
+// widths, because one width cannot tell a width-driven split from a constant
+// one: a layout that hides everything, or hides a fixed count, satisfies a
+// single narrow fixture. 200 px must place strictly more than 120 px does and
+// still hold something back.
+func TestToolBarOverflowShrinksAsTheBarGrows(t *testing.T) {
+	tb, _ := newLabelToolBar()
+
+	tb.SetBounds(0, 0, 120, 32)
+	tb.Layout()
+	visNarrow := visibleToolBarTexts(tb)
+	ovNarrow := overflowToolBarTexts(tb)
+	if !sameTexts(visNarrow, toolBarLabels[:len(visNarrow)]) {
+		t.Fatalf("at 120 px visible items = %v, want a prefix of %v", visNarrow, toolBarLabels)
+	}
+
+	tb.SetBounds(0, 0, 200, 32)
+	tb.Layout()
+	visWide := visibleToolBarTexts(tb)
+	ovWide := overflowToolBarTexts(tb)
+	if !sameTexts(visWide, toolBarLabels[:len(visWide)]) {
+		t.Fatalf("at 200 px visible items = %v, want a prefix of %v", visWide, toolBarLabels)
+	}
+	if !sameTexts(ovWide, toolBarLabels[len(visWide):]) {
+		t.Errorf("at 200 px overflow = %v, want the unplaced suffix %v", ovWide, toolBarLabels[len(visWide):])
+	}
+	if len(ovWide) == 0 {
+		t.Fatalf("at 200 px nothing overflowed (visible %v); the fixture no longer exercises a split", visWide)
+	}
+	if len(ovWide) >= len(ovNarrow) {
+		t.Errorf("overflow at 200 px = %v (%d items), at 120 px = %v (%d items); a wider bar must place strictly more",
+			ovWide, len(ovWide), ovNarrow, len(ovNarrow))
+	}
+}
+
+// TestToolBarWideningUnhidesEveryItem covers the other half of the split: the
+// items were hidden by a previous layout, so a re-layout that only places the
+// prefix leaves the rest hidden forever — the window is wide again and half the
+// toolbar is still blank.
+func TestToolBarWideningUnhidesEveryItem(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	tb.SetBounds(0, 0, 120, 32)
+	tb.Layout()
+	if len(tb.OverflowItems()) == 0 {
+		t.Fatalf("120 px bar overflowed nothing; there is nothing to bring back")
+	}
+
+	tb.SetBounds(0, 0, 1000, 32)
+	tb.Layout()
+	if got := len(tb.OverflowItems()); got != 0 {
+		t.Errorf("after widening, %d item(s) are still in the overflow: %v", got, overflowToolBarTexts(tb))
+	}
+	if got := visibleToolBarTexts(tb); !sameTexts(got, toolBarLabels) {
+		t.Errorf("after widening, visible items = %v, want all of %v; hidden items were never shown again",
+			got, toolBarLabels)
+	}
+	if tb.overflowButton().IsVisible() {
+		t.Error("the chevron is still visible on a bar where everything fits")
+	}
+}
+
+// TestToolBarChevronMenuTriggersTheOriginalActions drives the chevron the way a
+// user does — the button's own key activation, through Button.emit and the
+// binding installed by overflowButton — and inspects the menu that reached the
+// popup step. The menu is what the hidden actions are reached by, so both its
+// payload (one entry per hidden button, same order) and its wiring (the entry
+// runs the ORIGINAL button's action) are the point; an entry carrying the right
+// label and a dead handler is the failure this catches.
+func TestToolBarChevronMenuTriggersTheOriginalActions(t *testing.T) {
+	tb, fired := newLabelToolBar()
+	tb.SetBounds(0, 0, 120, 32)
+	tb.Layout()
+
+	hidden := overflowToolBarTexts(tb)
+	if len(hidden) < 2 {
+		t.Fatalf("120 px bar overflowed %v; the menu assertions need at least two entries", hidden)
+	}
+
+	// Swap only the OS-window step: ShowAsPopup makes an NSWindow, which a test
+	// goroutine may not do. Everything above it — the action binding, the menu
+	// build, the positioning — is the production code path.
+	var shown *Menu
+	saved := showToolBarPopup
+	showToolBarPopup = func(menu *Menu, xg, yg float64) { shown = menu }
+	t.Cleanup(func() { showToolBarPopup = saved })
+
+	tb.overflowButton().OnKeyDown(KeyEnter, false)
+
+	if shown == nil {
+		t.Fatal("activating the chevron showed no menu; the hidden actions are unreachable")
+	}
+	var entries []string
+	for _, item := range shown.Items() {
+		entries = append(entries, item.(*Button).Text())
+	}
+	if !sameTexts(entries, hidden) {
+		t.Fatalf("chevron menu entries = %v, want one per hidden item in order: %v", entries, hidden)
+	}
+
+	// The second entry, not the first: an off-by-one in the binding — or a
+	// handler bound to whichever button the loop ended on — survives triggering
+	// entry zero.
+	target := hidden[1]
+	want := -1
+	for i, s := range toolBarLabels {
+		if s == target {
+			want = i
+		}
+	}
+	shown.Items()[1].(*Button).OnKeyDown(KeyEnter, false)
+	if fired[want] != 1 {
+		t.Errorf("menu entry %q fired the original button's action %d time(s), want 1", target, fired[want])
+	}
+	for i, n := range fired {
+		if i != want && n != 0 {
+			t.Errorf("menu entry %q also fired %q's action %d time(s)", target, toolBarLabels[i], n)
+		}
+	}
+}
