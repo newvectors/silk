@@ -79,7 +79,21 @@ func (this *Dialog) AddButton(text string, result DialogResult) *Button {
 	})
 	this.buttons = append(this.buttons, btn)
 	this.Layout()
+	this.markDefaultButton()
 	return btn
+}
+
+// markDefaultButton moves the isDefault flag onto the button defaultButton()
+// currently resolves to, clearing it everywhere else. It runs after every
+// change to the button set or the explicit default because the implicit
+// heuristic can pick a different button each time (the last-added button is
+// default until an OK/Yes shows up), and two ringed buttons would be worse
+// than none.
+func (this *Dialog) markDefaultButton() {
+	def := this.defaultButton()
+	for _, b := range this.buttons {
+		b.SetDefault(b == def)
+	}
 }
 
 // ShowModal displays the dialog modally and returns the result.
@@ -155,6 +169,7 @@ func (this *Dialog) onBtnClick(key string) {
 // QPushButton::setDefault on a QDialog's button.
 func (this *Dialog) SetDefaultButton(btn *Button) {
 	this.defaultBtn = btn
+	this.markDefaultButton()
 }
 
 // SetCancelResult overrides the result returned when Esc closes the dialog

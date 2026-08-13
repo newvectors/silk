@@ -469,6 +469,15 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 	}
 }
 
+// buttonFocusRing decides whether a normal (non-menu) button gets the accent
+// ring. Keyboard focus and the dialog default share one cue: Tab has to be
+// visible as it moves, and the button Enter would fire has to be visible before
+// Tab ever reaches it. A disabled button never rings — it takes no focus and
+// defaultButton() skips it.
+func buttonFocusRing(focused, isDefault, enabled bool) bool {
+	return enabled && (focused || isDefault)
+}
+
 func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 	//	x, y := 0.0, 0.0
 	w, h := btn.Size()
@@ -547,6 +556,15 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.SetBrush1(t.ButtonHoverBGColor)
 			g.FillPreserve()
 			g.SetPen1(t.ButtonHoverBorderColor, 1)
+			g.Stroke()
+		}
+
+		// Focus / default ring, drawn over whatever face the state above
+		// painted. Inset by 1 so the 2px stroke stays inside the button's own
+		// bounds instead of bleeding onto its neighbour in a button bar.
+		if buttonFocusRing(btn.HasFocus(), btn.IsDefault(), btn.IsEnabled()) {
+			roundedRect(g, 1, 1, w-2, h-2, radius)
+			g.SetPen1(t.Accent, 2)
 			g.Stroke()
 		}
 

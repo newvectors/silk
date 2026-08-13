@@ -28,6 +28,7 @@ type Button struct {
 	Widget
 	pushed      bool
 	textVisible bool
+	isDefault   bool
 	//iconVisible bool
 	action     IAction
 	subPopup   IWidget
@@ -368,6 +369,22 @@ func (this *Button) SetIcon(icon paint.Icon) {
 
 func (this *Button) IsPushed() bool {
 	return this.pushed
+}
+
+// SetDefault marks this button as the default one — the button Enter
+// activates in a dialog. The theme rings it like a focused button so the Enter
+// target is visible before focus ever reaches it. Keeping exactly one button
+// flagged is the dialog's job, see Dialog.markDefaultButton.
+func (this *Button) SetDefault(b bool) {
+	if this.isDefault == b {
+		return
+	}
+	this.isDefault = b
+	this.Self().Update()
+}
+
+func (this *Button) IsDefault() bool {
+	return this.isDefault
 }
 
 func (this *Button) IsChecked() bool {
