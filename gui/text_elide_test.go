@@ -136,6 +136,46 @@ func TestStatusBarDrawElidesMessageToPermanentEdge(t *testing.T) {
 	}
 }
 
+// TestStatusBarDrawElidesMessageToBarWidth: a bar with no permanent widget is
+// the default shape, and there the message is bounded only by the bar's own
+// margins. Without that bound a long path is drawn past the right edge, where
+// the widget clip slices it mid-glyph — so the fallback has to cut too, not
+// just the permanent-edge case.
+func TestStatusBarDrawElidesMessageToBarWidth(t *testing.T) {
+	th := Theme()
+	m := th.ButtonMargin
+	const barW = 240.0
+
+	sb := NewStatusBar()
+	sb.SetBounds(0, 0, barW, 24)
+	msg := "构建失败: " + strings.Repeat("gui/generated/very/long/", 6) + "form.go"
+	sb.SetMessage(msg)
+	sb.Layout()
+
+	if sb.permanentLeft != 0 {
+		t.Fatalf("a bare status bar recorded a permanent edge at x=%.3f; this test needs the no-widget path", sb.permanentLeft)
+	}
+	limit := barW - m.L - m.R
+	if w := th.Font.TextExtents(msg).Width; w <= limit {
+		t.Fatalf("test is not discriminating: the message measures %.3f px, already inside the %.3f px bar", w, limit)
+	}
+
+	rec := newElideRecorder()
+	sb.Draw(rec)
+	if len(rec.texts) != 1 {
+		t.Fatalf("StatusBar.Draw painted %d strings, want 1 (the message)", len(rec.texts))
+	}
+	got := rec.texts[0]
+	if got == msg {
+		t.Fatalf("StatusBar.Draw painted the whole %.3f px message on a %.0f px bar: with no permanent widget nothing bounded it",
+			th.Font.TextExtents(msg).Width, barW)
+	}
+	if w := th.Font.TextExtents(got).Width; w > limit {
+		t.Errorf("bare StatusBar painted %q at %.3f px wide, past the %.3f px its own margins leave inside a %.0f px bar",
+			got, w, limit, barW)
+	}
+}
+
 // TestStatusBarLayoutClearsPermanentEdge: with nothing on the right the
 // message may use the whole bar, so Layout must not leave a stale edge behind
 // after the last permanent widget is removed.
