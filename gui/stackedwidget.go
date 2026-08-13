@@ -64,6 +64,36 @@ func (this *StackedWidget) RemovePage(idx int) {
 	this.Self().Update()
 }
 
+// MovePage reorders the pages in place, the way a tab strip does when a tab is
+// dragged to a new position. It only renumbers: no page is reparented, hidden
+// or shown, so whatever was on screen stays on screen.
+func (this *StackedWidget) MovePage(from, to int) {
+	n := len(this.pages)
+	if from < 0 || from >= n || to < 0 || to >= n || from == to {
+		return
+	}
+	cur := this.CurrentPage()
+	page := this.pages[from]
+	if from < to {
+		copy(this.pages[from:to], this.pages[from+1:to+1])
+	} else {
+		copy(this.pages[to+1:from+1], this.pages[to:from])
+	}
+	this.pages[to] = page
+
+	// currentIndex names a slot and the move renumbered the slots, so follow
+	// the page that was current. Leave the number alone and the index points at
+	// whatever page slid into that slot while a different page stays visible.
+	if cur != nil {
+		for i, p := range this.pages {
+			if p == cur {
+				this.currentIndex = i
+				break
+			}
+		}
+	}
+}
+
 func (this *StackedWidget) SetCurrentIndex(idx int) {
 	if idx < 0 || idx >= len(this.pages) {
 		return

@@ -43,6 +43,7 @@ type TabBar struct {
 	cbDragStart   func(tb *TabBar, idx int) interface{}
 	cbDragMove    func(tb *TabBar, dnd IDndContext)
 	cbDrop        func(tb *TabBar, idx int, dnd IDndContext)
+	cbMove        func(tb *TabBar, from, to int)
 }
 
 type _Tab struct {
@@ -500,6 +501,15 @@ func (this *TabBar) SetDndCallback(cbDragStart func(tb *TabBar, idx int) interfa
 	this.cbDrop = cbDrop
 }
 
+// SetMoveCallback registers a listener for a drag reorder of the strip itself.
+// A container that keeps its own list in tab order (TabWidget's pages) has to
+// apply the same move, otherwise the strip and the list disagree after a drag.
+// Dock needs none: a Dock tab's data is the view it shows, so moving the tab
+// moves the view with it.
+func (this *TabBar) SetMoveCallback(callback func(tb *TabBar, from, to int)) {
+	this.cbMove = callback
+}
+
 func (this *TabBar) OnDragEnter(x, y float64, dnd IDndContext) {
 	//core.Debug(dnd.From(), this)
 	if dnd.From() == this {
@@ -556,8 +566,16 @@ func (this *TabBar) OnDrop(x, y float64, dnd IDndContext) {
 		if this.dropPos > this.downTab {
 			this.dropPos--
 		}
+		from, to := this.downTab, this.dropPos
 		data := this.RemoveTab(this.downTab)
 		this.InsertTab(this.dropPos, data, true)
+		// The reorder moved the strip and nothing else. A container that pairs
+		// each tab with something of its own — TabWidget's pages — still holds
+		// the old order, so every later activation shows the page of a
+		// different tab. Report the move so it can follow.
+		if this.cbMove != nil && from != to {
+			this.cbMove(this, from, to)
+		}
 		dnd.SetAction(DndMove)
 		//}
 	}

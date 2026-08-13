@@ -65,6 +65,33 @@ func (this *TabWidget) Init(self IWidget) {
 			}
 		}
 	})
+
+	// Dragging a tab to a new position reorders the strip only, so refs and
+	// pages have to make the same move. Without this the strip reads [B C A]
+	// while the pages stay [A B C]: every activation shows the wrong page and
+	// RemoveTab later drops the wrong one.
+	this.tabBar.SetMoveCallback(func(tb *TabBar, from, to int) {
+		n := len(this.refs)
+		if from < 0 || from >= n || to < 0 || to >= n || from == to {
+			return
+		}
+		ref := this.refs[from]
+		if from < to {
+			copy(this.refs[from:to], this.refs[from+1:to+1])
+		} else {
+			copy(this.refs[to+1:from+1], this.refs[to:from])
+		}
+		this.refs[to] = ref
+		this.stack.MovePage(from, to)
+
+		// Last word: mid-reorder TabBar.RemoveTab re-activates a tab and that
+		// callback already pointed the stack somewhere with pre-move indices.
+		// Go straight to the stack — SetCurrentIndex would report a change for
+		// a tab the user never switched to.
+		if idx := tb.ActiveTab(); idx >= 0 && idx < this.stack.Count() {
+			this.stack.SetCurrentIndex(idx)
+		}
+	})
 }
 
 func (this *TabWidget) AddTab(w IWidget, title string, icon paint.Icon) {
