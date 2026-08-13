@@ -472,34 +472,84 @@ func (this *ObjectInspector) OnLeftDown(x, y float64) {
 	this.Self().Update()
 }
 
-// Compile-time check: the window dispatches keys through this interface
-// (window_glfw.go onKey), so a typo in the signature would leave the panel
+// Compile-time checks: the window dispatches keys through these interfaces
+// (window_glfw.go onKey), so a typo in either signature would leave the panel
 // silently deaf rather than failing to build.
-var _ gui.IEventKeyDown = (*ObjectInspector)(nil)
+var (
+	_ gui.IEventKeyDown = (*ObjectInspector)(nil)
+	_ gui.IEventKeyUp   = (*ObjectInspector)(nil)
+)
+
+// selectedWidget returns the widget the highlighted row stands for, and nil
+// when no row is highlighted or the row is the form root — the document itself,
+// which has neither a widget to delete nor a name to edit.
+//
+// It compares the ITEM, not the row index. Row 0 is the form root only while
+// the tree is unfiltered: with a filter on, Rebuild lists the matches flat and
+// never emits the root row at all, so an index test refuses the very row the
+// user filtered down to. The drag guard in OnLeftDown reads the filter for the
+// same reason.
+func (this *ObjectInspector) selectedWidget() graph.IItem {
+	item := this.SelectedItem()
+	if item == nil || item == graph.IItem(this.scene) {
+		return nil
+	}
+	return item
+}
 
 // OnKeyDown gives the tree the three keys the canvas beside it already answers:
 // the arrows walk the rows, Delete removes the selected widget and F2 renames
 // it. Reaching a widget nested inside a container is often only practical here,
 // and until now every keystroke after that press had to go back to the canvas.
 //
-// Delete and F2 skip the form root (row 0) — it is the document, not a widget —
-// and are a no-op without a view, the same guard reparentInto carries: a host
-// that bound only a scene has no canvas selection to delete and no undo stack
-// to record the edit on. Every other key is left for someone else.
+// Delete and F2 skip the form root and are a no-op without a view, the same
+// guard reparentInto carries: a host that bound only a scene has no canvas
+// selection to delete and no undo stack to record the edit on. Both keys stay
+// consumed either way — handing a refused Delete to the canvas would delete
+// whatever the canvas is holding instead. BackSpace is answered here for that
+// reason too: the canvas deletes on either key, so forwarding one of them would
+// leave the form-root guard bypassable by the other.
+//
+// Every other key goes on to the canvas, the way generatedView passes what it
+// does not answer to the editor underneath it. The window routes a key to the
+// focused widget alone and nothing bubbles to a parent, so a key dropped here
+// while the tree holds focus is a key the designer loses: before this panel
+// took focus, Ctrl+Z, Esc, Ctrl+C/V/X/D and the Alt aligns all reached
+// GedView.OnKeyDown, and "delete a row, then undo it" is the first thing the
+// keys above invite.
 func (this *ObjectInspector) OnKeyDown(key int, repeat bool) {
-	switch key {
-	case gui.KeyUp:
+	item := this.selectedWidget()
+	// A chord is never one of the tree's own keys — the walk is on the bare
+	// arrows — so Ctrl+arrow stays the canvas's resize gesture.
+	ctrl := keyDown(gui.KeyCtrl)
+	switch {
+	case key == gui.KeyUp && !ctrl:
 		this.moveSelection(-1)
-	case gui.KeyDown:
+	case key == gui.KeyDown && !ctrl:
 		this.moveSelection(1)
-	case gui.KeyDelete:
-		if this.view != nil && this.selectedIdx > 0 {
+	case key == gui.KeyDelete || key == gui.KeyBackSpace:
+		if this.view != nil && item != nil {
 			this.view.DeleteSelectedItems()
 		}
-	case gui.KeyF2:
-		if this.view != nil && this.selectedIdx > 0 {
-			this.view.renameItem(this.items[this.selectedIdx].item)
+	case key == gui.KeyF2:
+		if this.view != nil && item != nil {
+			this.view.renameItem(item)
 		}
+	default:
+		if this.view != nil {
+			this.view.OnKeyDown(key, repeat)
+		}
+	}
+}
+
+// OnKeyUp completes the forward. The window sends the release to the focused
+// widget too, so a press that went to the canvas must have its release follow
+// it: GedView arms Space+drag panning on the press and disarms it on the
+// release, and a release swallowed here leaves the canvas panning on the next
+// click instead of selecting.
+func (this *ObjectInspector) OnKeyUp(key int) {
+	if this.view != nil {
+		this.view.OnKeyUp(key)
 	}
 }
 
