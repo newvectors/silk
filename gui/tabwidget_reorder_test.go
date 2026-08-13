@@ -17,6 +17,22 @@ func newTabWidgetABC() *TabWidget {
 	return tw
 }
 
+// newTabWidgetABCD builds the four-page shape the IDE editor strip actually
+// runs in: buildEditorTabs seeds three tabs and grows by one per file opened.
+// Four is the first count where a tab can move and still leave a tab standing
+// outside the span that moved -- that bystander keeps its own page or the
+// reorder is wrong, and no three-tab end-to-end move produces one.
+func newTabWidgetABCD() *TabWidget {
+	tw := NewTabWidget()
+	for _, title := range []string{"A", "B", "C", "D"} {
+		tw.AddTab(NewLabel("page"+title), title, nil)
+	}
+	hints := tw.SizeHints()
+	tw.SetBounds(0, 0, hints.Width, hints.Height)
+	tw.Layout()
+	return tw
+}
+
 // tabTitleAt reads the title the strip paints at index i.
 func tabTitleAt(tb *TabBar, i int) string {
 	ref, _ := tb.Data(i).(*tabPageRef)
@@ -101,6 +117,37 @@ func assertPaired(t *testing.T, tw *TabWidget) {
 	}
 }
 
+// assertStripOrder checks the titles the strip paints, left to right. Pairing
+// alone is not enough on its own: a drop that moved nothing keeps every tab
+// beside its own page, so the landing order has to be pinned too.
+func assertStripOrder(t *testing.T, tb *TabBar, want ...string) {
+	t.Helper()
+	if got := tb.Count(); got != len(want) {
+		t.Fatalf("strip holds %d tabs, want %d %v", got, len(want), want)
+	}
+	for i, w := range want {
+		if got := tabTitleAt(tb, i); got != w {
+			t.Errorf("strip slot %d = %q, want %q", i, got, w)
+		}
+	}
+}
+
+// assertEveryTabShowsItsPage switches to each tab in turn and checks the page
+// that ends up on screen is the one that tab owns -- what the user meets after
+// a reorder loses track of a page.
+func assertEveryTabShowsItsPage(t *testing.T, tw *TabWidget) {
+	t.Helper()
+	tb := tw.TabBar()
+	for i := 0; i < tb.Count(); i++ {
+		tw.SetCurrentIndex(i)
+		title := tabTitleAt(tb, i)
+		if got := visiblePageTexts(tw); len(got) != 1 || got[0] != "page"+title {
+			t.Errorf("switching to slot %d (tab %q) leaves %v on screen, want [page%s]",
+				i, title, got, title)
+		}
+	}
+}
+
 // TestTabWidgetDragReorderKeepsPagesPaired drags the first tab past the last
 // one. TabBar.OnDrop reorders its own strip and told nobody, so the TabWidget's
 // refs and the stack's pages kept the old order: the strip read [B C A] while
@@ -172,6 +219,59 @@ func TestTabWidgetDragReorderBackwards(t *testing.T) {
 	if got, want := visiblePageTexts(tw), "pageC"; len(got) != 1 || got[0] != want {
 		t.Errorf("visible page(s) after dropping tab C = %v, want [%s]", got, want)
 	}
+}
+
+// TestTabWidgetDragReorderMovesOnlyTheSpan drags a tab across a four-tab strip
+// and leaves a tab standing past the move. A reorder renumbers only the slots
+// between the tab's old and new position; everything outside that span keeps
+// the page it already had. The two tests above move an end tab to the other
+// end, where the span is the whole strip and there is no outside to get wrong.
+func TestTabWidgetDragReorderMovesOnlyTheSpan(t *testing.T) {
+	// Forward: A moves one slot right, [A B C D] -> [B A C D]. C and D sit
+	// past the drop and are none of the move's business.
+	t.Run("forward", func(t *testing.T) {
+		tw := newTabWidgetABCD()
+		tb := tw.TabBar()
+
+		dragTab(t, tb, 0, dropPointAt(t, tb, 2))
+
+		assertStripOrder(t, tb, "B", "A", "C", "D")
+		assertPaired(t, tw)
+		if got, want := currentPageText(tw), "pageA"; got != want {
+			t.Errorf("current page after dropping tab A = %q, want %q", got, want)
+		}
+		assertEveryTabShowsItsPage(t, tw)
+	})
+
+	// Backward: C is dragged out of the middle to the front,
+	// [A B C D] -> [C A B D]. D sits past the tab that left and must not move.
+	t.Run("backward", func(t *testing.T) {
+		tw := newTabWidgetABCD()
+		tb := tw.TabBar()
+
+		dragTab(t, tb, 2, dropPointAt(t, tb, 0))
+
+		assertStripOrder(t, tb, "C", "A", "B", "D")
+		assertPaired(t, tw)
+		if got, want := currentPageText(tw), "pageC"; got != want {
+			t.Errorf("current page after dropping tab C = %q, want %q", got, want)
+		}
+		assertEveryTabShowsItsPage(t, tw)
+	})
+}
+
+// TestTabWidgetDragReorderBackwardsOneSlot nudges the middle tab of the
+// three-tab strip one slot left. TestTabWidgetDragReorderBackwards drags the
+// last tab, and a last tab has nothing behind it to leave behind; B does.
+func TestTabWidgetDragReorderBackwardsOneSlot(t *testing.T) {
+	tw := newTabWidgetABC()
+	tb := tw.TabBar()
+
+	dragTab(t, tb, 1, dropPointAt(t, tb, 0))
+
+	assertStripOrder(t, tb, "B", "A", "C")
+	assertPaired(t, tw)
+	assertEveryTabShowsItsPage(t, tw)
 }
 
 // TestTabBarDragReorderWithoutMoveCallback is the Dock shape: a bare strip whose
