@@ -160,6 +160,7 @@ var factoryMap = map[string]widgetMapping{
 	"gui.TrendPanel":      {goType: "*gui.TrendPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTrendPanel()`},
 	"gui.StatsPanel":      {goType: "*gui.StatsPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewStatsPanel()`},
 	"gui.DeviceComponent": {goType: "*device.DeviceComponent", importPath: "github.com/uk0/silk/device", constructor: `device.NewDeviceComponent()`},
+	"gui.SetpointBox":     {goType: "*gui.SetpointBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSetpointBox()`},
 }
 
 // GenerateRunnable controls whether a complete runnable main() is generated.
@@ -895,6 +896,9 @@ var widgetEvents = map[string][]widgetEvent{
 		{name: "OnTextChanged", code: "\tui.%s.SigChanged(%s)\n", params: "s string"},
 		{name: "OnClick", code: "\tui.%s.SigWidgetClicked(%s)\n", params: "s string"},
 	},
+	"gui.SetpointBox": {
+		{name: "OnCommit", code: "\tui.%s.SigCommit(func(v float64) { %s(v) })\n", params: "v float64"},
+	},
 }
 
 // handlerBinding is one (event → handler) pair a widget contributes, resolved
@@ -1108,6 +1112,7 @@ var industrialDesignProps = map[string][]designProp{
 	"gui.Pipe":           {{"FlowColor", "SetFlowColor", dpColor}, {"IsVertical", "SetVertical", dpBool}},
 	"gui.Thermometer":    {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
 	"gui.ValueBar":       {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
+	"gui.SetpointBox":    {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Value", "SetValue", dpFloat}, {"Decimals", "SetDecimals", dpInt}},
 	"gui.Gauge":          {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Unit", "SetUnit", dpString}, {"Title", "SetTitle", dpString}},
 	// Standard input/display widgets: reproduce a designer-set range and
 	// initial value/state.

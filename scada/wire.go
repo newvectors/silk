@@ -1,11 +1,13 @@
 package scada
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/device"
+	"github.com/uk0/silk/eventlog"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/report"
 )
@@ -188,11 +190,13 @@ func wireAlarmPanel(s *Services, p *gui.AlarmPanel) func() {
 }
 
 // bindIndustrial binds a tag-driven industrial widget to its tag through the
-// structural TagName() seam. Only the eight industrial widgets expose TagName(),
-// so any other widget (containers, charts, inputs) falls through as a no-op.
-// Float sinks ease to each new sample via gui.BindTagAnimated; boolean sinks
-// snap via a posted gui.BindTag. Each widget exposes exactly one of these
-// setters, so the type switch is unambiguous.
+// structural TagName() seam. Only the eight industrial widgets and the
+// SetpointBox expose TagName(), so any other widget (containers, charts, inputs)
+// falls through as a no-op. Float sinks ease to each new sample via
+// gui.BindTagAnimated; boolean sinks snap via a posted gui.BindTag. Each
+// read-only widget exposes exactly one of these setters, so the type switch is
+// unambiguous; the SetpointBox also writes, and its case is first because the
+// plain SetValue case would otherwise match it and bind it read-only.
 func bindIndustrial(s *Services, w gui.IWidget, opt ScreenOptions) func() {
 	namer, ok := w.(interface{ TagName() string })
 	if !ok {
@@ -205,6 +209,19 @@ func bindIndustrial(s *Services, w gui.IWidget, opt ScreenOptions) func() {
 	tag := s.Tags.GetOrCreate(name, core.Meta{})
 
 	switch sink := w.(type) {
+	case interface {
+		SetValue(float64)
+		SigCommit(func(float64))
+	}: // SetpointBox — the only two-way widget
+		// FIRST case on purpose: the SetValue(float64) case below matches a
+		// SetpointBox too, and would bind it read-only — the operator's commit
+		// would then reach no tag at all.
+		stopRead := gui.BindTagAnimated(tag, sink.SetValue, opt.AnimateDur)
+		sink.SigCommit(func(v float64) {
+			tag.SetValue(v)
+			s.RecordEvent(eventlog.KindWrite, name, fmt.Sprintf("setpoint %g", v))
+		})
+		return func() { stopRead(); sink.SigCommit(nil) }
 	case interface{ SetLevel(float64) }: // Tank
 		return gui.BindTagAnimated(tag, sink.SetLevel, opt.AnimateDur)
 	case interface{ SetValue(float64) }: // DigitalDisplay, Thermometer, ValueBar
