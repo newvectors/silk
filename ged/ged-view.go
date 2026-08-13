@@ -2523,8 +2523,9 @@ func computeAlignGuides(dragged geom.Rect, others []geom.Rect, canvas geom.Rect,
 
 // computeAlignGuides (method) refreshes this.alignGuides for the live drag: it
 // builds the proposed rect for each selected item (its current position offset
-// by dx,dy) and the rects of every non-selected sibling, then delegates to the
-// pure computeAlignGuides helper with the full scene as the canvas. Guides are
+// by dx,dy) and the rects of every non-selected item in the scene — widgets
+// nested inside containers included — then delegates to the pure
+// computeAlignGuides helper with the full scene as the canvas. Guides are
 // purely visual and never move a widget.
 func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 	this.alignGuides = nil
@@ -2541,18 +2542,30 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 	canvas := geom.Rect{X: 0, Y: 0, Width: sceneW, Height: sceneH}
 
 	// Build a set of selected items for fast lookup, then collect the rects of
-	// every non-selected sibling as alignment targets.
+	// every non-selected item as alignment targets.
 	selSet := make(map[graph.IItem]bool, len(sel))
 	for _, s := range sel {
 		selSet[s] = true
 	}
+	// The walk goes all the way down, not just across the top level: a widget
+	// inside a container is as much an alignment target as a top-level sibling,
+	// and containers are an ordinary way to build a form. A selected item is
+	// skipped whole — subtree included — so a dragged container never lines up
+	// against the children it is carrying. Child bounds are already scene
+	// coordinates (ged never turns on local coords, see offsetSubtree), so the
+	// rects are taken as they are.
 	var others []geom.Rect
-	for _, other := range scene.Children() {
-		if selSet[other] {
-			continue
+	var collect func(items []graph.IItem)
+	collect = func(items []graph.IItem) {
+		for _, other := range items {
+			if selSet[other] || hasSelectedAncestor(other, selSet) {
+				continue
+			}
+			others = append(others, geom.Rect{X: other.X(), Y: other.Y(), Width: other.Width(), Height: other.Height()})
+			collect(other.Children())
 		}
-		others = append(others, geom.Rect{X: other.X(), Y: other.Y(), Width: other.Width(), Height: other.Height()})
 	}
+	collect(scene.Children())
 
 	manual := this.activeGuides()
 	for _, dragging := range sel {
