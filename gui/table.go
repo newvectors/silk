@@ -878,14 +878,15 @@ func (this *Table) Draw(g paint.Painter) {
 
 		// Alternating row background
 		if r%2 == 1 {
-			altColor := paint.Color{245, 245, 250, 255}
+			altColor := tableAltRowColor(t)
 			g.SetBrush1(altColor)
 			g.Rectangle(0, y, this.totalColumnWidth(), rh)
 			g.Fill()
 		}
 
 		// Selection highlight
-		if this.isRowSelected(r) {
+		selected := this.isRowSelected(r)
+		if selected {
 			g.SetBrush1(t.HighLightColor)
 			g.Rectangle(0, y, this.totalColumnWidth(), rh)
 			g.Fill()
@@ -897,7 +898,7 @@ func (this *Table) Draw(g paint.Painter) {
 			cw := this.columnWidth(c)
 			txt := this.model.CellText(this.dispRow(r), c)
 			if txt != "" {
-				g.SetBrush1(t.TextColor)
+				g.SetBrush1(selectionTextColor(t, selected))
 				yt := y + fe.Ascent + (rh-fe.Height)*0.5
 				g.DrawText1(xPos+4, yt, txt)
 			}

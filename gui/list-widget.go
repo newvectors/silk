@@ -225,8 +225,11 @@ func (this *ListWidget) Draw(g paint.Painter) {
 	y := float64(r0) * rh
 	for r := r0; r <= r1; r++ {
 
-		if this.showSelect && this.activeIndex == r ||
-			!this.showSelect && this.showHover && this.hoverIndex == r {
+		// One condition for both the fill and the ink below, so a row can never
+		// get the highlight fill without the ink that reads on top of it.
+		selected := this.showSelect && this.activeIndex == r ||
+			!this.showSelect && this.showHover && this.hoverIndex == r
+		if selected {
 			g.SetBrush1(Theme().HighLightColor)
 			g.Rectangle1(geom.Rect{0, y, wc, rh})
 			g.Fill()
@@ -262,7 +265,7 @@ func (this *ListWidget) Draw(g paint.Painter) {
 			g.Stroke()
 		}
 		//core.Debug("xt yt = ", xt, yt)
-		g.SetBrush1(Theme().TextColor)
+		g.SetBrush1(selectionTextColor(Theme(), selected))
 		g.DrawText1(xt, yt, this.items[r].Text)
 
 		y += rh

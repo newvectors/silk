@@ -1051,7 +1051,7 @@ func (this *TreeView) drawCellContent(g paint.Painter, row *TreeViewRow, ci int,
 	g.Rectangle(x, y, w, h)
 	g.Clip()
 
-	g.SetBrush1(Theme().TextColor)
+	g.SetBrush1(selectionTextColor(Theme(), row.selected))
 	txt := this.getCellText(row, ci)
 	fe := g.Font().FontExtents()
 	g.DrawText1(x+2, y+fe.Ascent+0.5*(h-fe.Height), txt)
