@@ -2804,8 +2804,11 @@ func (this *GedView) OnLeftUp(x, y float64) {
 
 	wasDragging := this.isDragging
 	// The target and the gesture kind are read before GraphView.OnLeftUp so a
-	// tool that clears the drag state cannot take them away from us.
+	// tool that clears the drag state cannot take them away from us. resized is
+	// read here for the same reason and one more: GraphView.OnLeftUp is where
+	// DecorPart commits the resize and drops the moving flag it is asking about.
 	target, movesItems := this.dropContainer, this.dragMovesItems
+	resized := this.resizeGestureItem()
 	this.GraphView.OnLeftUp(x, y)
 	this.isDragging = false
 	this.alignGuides = nil
@@ -2820,7 +2823,16 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// don't move the widget, so grid snap and the guides compose cleanly.
 	if wasDragging {
 		this.snapSelectionToGrid()
-		this.snapSelectionSizeToGrid()
+		// The size snap answers to the resize gesture alone. Every other canvas
+		// gesture ends here too — a selection click, a click on empty canvas
+		// (which selects the form), a marquee, a plain move drag — and not one
+		// of them changed a size for the snap to tidy: rounding one there would
+		// resize a widget the user never grabbed a handle on, with nothing on
+		// the undo stack (the snap mutates directly) and nothing on screen (the
+		// status bar prints the size with %.0f).
+		if resized != nil {
+			this.snapSelectionSizeToGrid(resized)
+		}
 		if movesItems {
 			// After the snap, so the re-parent records the resting position —
 			// and so the park judges that same position. target was chosen
@@ -2954,19 +2966,50 @@ func (this *GedView) snapSelectionToGrid() {
 	}
 }
 
-// snapSelectionSizeToGrid rounds every size-unlocked selected item's width and
-// height onto the grid, the way snapSelectionToGrid does for its position. A
-// form built by dragging widgets in is pixel-tidy; the same form resized by a
-// handle was not, because the handle drag commits the raw scene mm it was
-// released at (graph ResizeDecor.OnEndMoveHandle) — and the status bar prints
-// the size with %.0f, so a 38.3mm widget reads as "38 mm" and nothing on
+// resizeGestureItem returns the item whose handle the gesture being released
+// was dragging, or nil when the gesture was not a handle resize at all. Both
+// halves are read off the graph state the gesture itself set:
+//
+//   - the press landed on a resize handle — the same question OnMouseMove asks
+//     of the drag origin, and the one that decides whether DecorPart claims the
+//     press instead of MovePart. The decors are hit-tested against bounds the
+//     resize has not touched yet, so the origin still hits the handle it was
+//     pressed on;
+//   - and the pointer then crossed the drag threshold, which is what makes
+//     DecorPart call OnBeginMoveHandle and mark the decor as moving. A press on
+//     a handle that never moved (or jittered under the threshold) commits no
+//     resize command at all — DecorPart skips OnEndMoveHandle — so there is no
+//     new size for the snap to tidy, and rounding one would be the same silent,
+//     un-undoable edit as snapping a plain click.
+//
+// Only valid before GraphView.OnLeftUp, which is where the resize is committed
+// and the moving flag cleared.
+func (this *GedView) resizeGestureItem() graph.IItem {
+	decor, _ := this.FindHandleAt(this.dragOriginX, this.dragOriginY)
+	if decor == nil || !decor.NakedDecor().IsMovingHandle() {
+		return nil
+	}
+	return decor.Item()
+}
+
+// snapSelectionSizeToGrid rounds the width and height of everything the resize
+// gesture just resized onto the grid, the way snapSelectionToGrid does for its
+// position. A form built by dragging widgets in is pixel-tidy; the same form
+// resized by a handle was not, because the handle drag commits the raw scene mm
+// it was released at (graph ResizeDecor.OnEndMoveHandle) — and the status bar
+// prints the size with %.0f, so a 38.3mm widget reads as "38 mm" and nothing on
 // screen betrays the fraction.
+//
+// dragged is the item whose handle was dragged (resizeGestureItem); the rest of
+// the selection was scaled along with it by the same command. Only a real
+// resize gesture may call this: the snap mutates directly, so a size it rounds
+// on any other gesture is off the undo stack and out of sight.
 //
 // Manual guides are position guides: they pull an edge, never an extent, so
 // only the grid pitch is consulted here. No-op when snap is disabled. Applied
 // directly (mutate + Update) like snapSelectionToGrid — it tidies the resting
 // size rather than introducing its own resize command.
-func (this *GedView) snapSelectionSizeToGrid() {
+func (this *GedView) snapSelectionSizeToGrid(dragged graph.IItem) {
 	// The same master switch snapSelectionToGrid reads, so 表单设置 turns the
 	// position snap and the size snap off together.
 	grid := this.gridModel()
@@ -2979,7 +3022,11 @@ func (this *GedView) snapSelectionSizeToGrid() {
 		selSet[item] = true
 	}
 	for _, item := range items {
-		if item.IsLockSize() {
+		// The exclusion ResizeDecor.OnEndMoveHandle applies to every selected
+		// item but the one being dragged: a locked item is dropped from the
+		// resize command, so the gesture left its size alone and the snap has
+		// nothing to tidy on it.
+		if item != dragged && (item.IsLockSize() || item.IsLockPos()) {
 			continue
 		}
 		// An item whose own container is selected too was already scaled by
