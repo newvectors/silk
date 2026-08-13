@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/uk0/silk/paint"
@@ -136,6 +137,51 @@ func TestButtonDrawFocusRing(t *testing.T) {
 	}
 }
 
+// flaggedDefaults returns every button of dlg wearing the isDefault flag — the
+// set the theme would ring. The invariant behind all the dialog default tests
+// is that it holds exactly the one button defaultButton() activates.
+func flaggedDefaults(dlg *Dialog) []*Button {
+	var out []*Button
+	for _, b := range dlg.buttons {
+		if b.IsDefault() {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// btnText names a button in a failure message, tolerating a missing default.
+func btnText(b *Button) string {
+	if b == nil {
+		return "<none>"
+	}
+	return b.Text()
+}
+
+// assertSoleDefault pins the invariant at one point in a dialog's life: exactly
+// one button flagged, it is want, and defaultButton() agrees with the flag.
+// step names the state so a failure says which call left the ring behind.
+func assertSoleDefault(t *testing.T, dlg *Dialog, want *Button, step string) {
+	t.Helper()
+	got := flaggedDefaults(dlg)
+	if len(got) != 1 {
+		names := make([]string, len(got))
+		for i, b := range got {
+			names[i] = btnText(b)
+		}
+		t.Fatalf("%s: %d buttons flagged default %q, want exactly 1 (%q)",
+			step, len(got), names, btnText(want))
+	}
+	if got[0] != want {
+		t.Errorf("%s: flagged %q, want %q — the ring sits on a button Enter does not activate",
+			step, btnText(got[0]), btnText(want))
+	}
+	if def := dlg.defaultButton(); got[0] != def {
+		t.Errorf("%s: flagged %q but defaultButton() activates %q",
+			step, btnText(got[0]), btnText(def))
+	}
+}
+
 // TestDialogMarksExactlyOneDefaultButton: defaultButton() already knew which
 // button Enter activates, and nothing painted it. AddButton / SetDefaultButton
 // must keep that answer mirrored onto exactly one button's isDefault flag —
@@ -146,38 +192,78 @@ func TestDialogMarksExactlyOneDefaultButton(t *testing.T) {
 	ok := dlg.AddButton("OK", DialogOK)
 	cancel := dlg.AddButton("Cancel", DialogCancel)
 
-	flagged := func() []*Button {
-		var out []*Button
-		for _, b := range dlg.buttons {
-			if b.IsDefault() {
-				out = append(out, b)
-			}
-		}
-		return out
-	}
-
-	got := flagged()
-	if len(got) != 1 {
-		t.Fatalf("after AddButton OK+Cancel: %d buttons flagged default, want exactly 1", len(got))
-	}
-	if got[0] != dlg.defaultButton() {
-		t.Errorf("flagged button %q is not the one defaultButton() activates (%q)",
-			got[0].Text(), dlg.defaultButton().Text())
-	}
-	if got[0] != ok {
-		t.Errorf("flagged button = %q, want the affirmative OK button", got[0].Text())
-	}
+	assertSoleDefault(t, dlg, ok, "after AddButton OK+Cancel")
 
 	dlg.SetDefaultButton(cancel)
 
-	got = flagged()
-	if len(got) != 1 {
-		t.Fatalf("after SetDefaultButton(Cancel): %d buttons flagged default, want exactly 1 (old default not cleared?)", len(got))
+	assertSoleDefault(t, dlg, cancel, "after SetDefaultButton(Cancel)")
+}
+
+// dialogAdd is one AddButton call in an arrangement fixture.
+type dialogAdd struct {
+	text   string
+	result DialogResult
+}
+
+// TestDialogDefaultFlagFollowsAddOrder walks the arrangements an OK-first
+// fixture cannot reach: the affirmative button arriving last, and a set where
+// the implicit default has to move twice before it lands. The flag is asserted
+// after every AddButton, not only at the end — markDefaultButton's own comment
+// promises the last-added button carries the default until an OK/Yes shows up,
+// so a dialog whose answer never changes cannot tell whether the flag was
+// computed over the button set the caller just added to or the one before it.
+func TestDialogDefaultFlagFollowsAddOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		adds []dialogAdd
+		// want[i] is the text of the button that must be default once adds[i]
+		// has been added.
+		want []string
+	}{
+		{
+			name: "cancel then ok",
+			adds: []dialogAdd{{"Cancel", DialogCancel}, {"OK", DialogOK}},
+			want: []string{"Cancel", "OK"},
+		},
+		{
+			name: "no then cancel then yes",
+			adds: []dialogAdd{{"No", DialogNo}, {"Cancel", DialogCancel}, {"Yes", DialogYes}},
+			want: []string{"No", "Cancel", "Yes"},
+		},
+		{
+			name: "ok first keeps it through two more",
+			adds: []dialogAdd{{"OK", DialogOK}, {"No", DialogNo}, {"Cancel", DialogCancel}},
+			want: []string{"OK", "OK", "OK"},
+		},
 	}
-	if got[0] != cancel {
-		t.Errorf("flagged button = %q, want the newly set default Cancel", got[0].Text())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dlg := NewDialog("t", nil)
+			byText := make(map[string]*Button, len(tc.adds))
+			for i, a := range tc.adds {
+				byText[a.text] = dlg.AddButton(a.text, a.result)
+				assertSoleDefault(t, dlg, byText[tc.want[i]],
+					fmt.Sprintf("after AddButton(%q), %d button(s) added", a.text, i+1))
+			}
+		})
 	}
-	if ok.IsDefault() {
-		t.Errorf("OK still reports IsDefault after the default moved to Cancel")
-	}
+}
+
+// TestDialogSetDefaultButtonAfterButtonsExist covers the override arriving once
+// the whole button set is already built, and the revert back to the implicit
+// heuristic. Both re-mark over every button, so the flag has to leave the
+// button it was on and land on exactly the new answer.
+func TestDialogSetDefaultButtonAfterButtonsExist(t *testing.T) {
+	dlg := NewDialog("t", nil)
+	no := dlg.AddButton("No", DialogNo)
+	dlg.AddButton("Cancel", DialogCancel)
+	yes := dlg.AddButton("Yes", DialogYes)
+
+	assertSoleDefault(t, dlg, yes, "three buttons, implicit default")
+
+	dlg.SetDefaultButton(no)
+	assertSoleDefault(t, dlg, no, "after SetDefaultButton(No)")
+
+	dlg.SetDefaultButton(nil)
+	assertSoleDefault(t, dlg, yes, "after SetDefaultButton(nil), back to the implicit default")
 }
