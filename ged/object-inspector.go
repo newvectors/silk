@@ -428,19 +428,37 @@ func dropIsInto(frac float64) bool {
 	return frac >= 0.25 && frac < 0.75
 }
 
+// selectRow highlights row idx and does everything selecting a row means: the
+// canvas selection follows, the SigSelect callback fires, the scroll stays
+// legal. The mouse and the keyboard both go through it — a second copy of the
+// body is how an arrow key ends up highlighting a row the canvas never heard
+// about.
+func (this *ObjectInspector) selectRow(idx int) {
+	if idx < 0 || idx >= len(this.items) {
+		return
+	}
+	this.selectedIdx = idx
+	this.selectOnCanvas(this.items[idx].item)
+	if this.cbSelect != nil {
+		this.cbSelect(this.items[idx].item)
+	}
+	this.clampScroll()
+	this.Self().Update()
+}
+
 // OnLeftDown handles click selection and begins drag tracking.
 func (this *ObjectInspector) OnLeftDown(x, y float64) {
 	top := this.contentTop()
 	if y < top {
 		return
 	}
+	// Take focus so the keys below reach this panel instead of whatever held
+	// it before. Placed after the header guard: a press on the filter box
+	// belongs to the filter box.
+	this.SetFocus()
 	idx, _ := rowAt(y, top, this.scrollY, this.rowHeight)
 	if idx >= 0 && idx < len(this.items) {
-		this.selectedIdx = idx
-		this.selectOnCanvas(this.items[idx].item)
-		if this.cbSelect != nil {
-			this.cbSelect(this.items[idx].item)
-		}
+		this.selectRow(idx)
 		// Start a potential drag on any row but the form root. Filtered rows
 		// are listed flat, so neither the sibling arithmetic in reorderItems
 		// nor a nesting target means anything while a filter is on.
@@ -452,6 +470,51 @@ func (this *ObjectInspector) OnLeftDown(x, y float64) {
 		}
 	}
 	this.Self().Update()
+}
+
+// Compile-time check: the window dispatches keys through this interface
+// (window_glfw.go onKey), so a typo in the signature would leave the panel
+// silently deaf rather than failing to build.
+var _ gui.IEventKeyDown = (*ObjectInspector)(nil)
+
+// OnKeyDown gives the tree the three keys the canvas beside it already answers:
+// the arrows walk the rows, Delete removes the selected widget and F2 renames
+// it. Reaching a widget nested inside a container is often only practical here,
+// and until now every keystroke after that press had to go back to the canvas.
+//
+// Delete and F2 skip the form root (row 0) — it is the document, not a widget —
+// and are a no-op without a view, the same guard reparentInto carries: a host
+// that bound only a scene has no canvas selection to delete and no undo stack
+// to record the edit on. Every other key is left for someone else.
+func (this *ObjectInspector) OnKeyDown(key int, repeat bool) {
+	switch key {
+	case gui.KeyUp:
+		this.moveSelection(-1)
+	case gui.KeyDown:
+		this.moveSelection(1)
+	case gui.KeyDelete:
+		if this.view != nil && this.selectedIdx > 0 {
+			this.view.DeleteSelectedItems()
+		}
+	case gui.KeyF2:
+		if this.view != nil && this.selectedIdx > 0 {
+			this.view.renameItem(this.items[this.selectedIdx].item)
+		}
+	}
+}
+
+// moveSelection walks the highlight delta rows and stops at the ends of the
+// list. With nothing highlighted yet (selectedIdx == -1) either arrow lands on
+// the first row, so the keyboard has a way in.
+func (this *ObjectInspector) moveSelection(delta int) {
+	idx := this.selectedIdx + delta
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > len(this.items)-1 {
+		idx = len(this.items) - 1
+	}
+	this.selectRow(idx)
 }
 
 // OnMouseMove handles hover highlighting and drag indicator.
