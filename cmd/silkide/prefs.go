@@ -525,6 +525,16 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		if !canQuit(designCanvas) {
 			return
 		}
+		// Out through Frame.Close, the same door the title bar's close button
+		// uses. Ending the loop directly skips the frame's closed callback,
+		// which is where the window geometry and the open-file set get
+		// written — so a Cmd+Q quit used to leave the PREVIOUS launch's
+		// session on disk and restore it next time. Frame.Close never
+		// consults the can-close guard, so canQuit above is still asked once.
+		if closeApp != nil {
+			closeApp()
+			return
+		}
 		quitApp()
 	})
 

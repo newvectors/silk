@@ -89,6 +89,11 @@ func main() {
 	frame.SetTitle(idTitle())
 	gui.SetDefaultFrame(frame)
 	globalFrame = frame
+	// Cmd+Q's exit route. It has to end at Frame.Close so the quit runs the
+	// same teardown the title bar's close button does — the geometry and
+	// open-session writes below hang off the closed callback, and a quit that
+	// jumps straight to core.Quit leaves the previous launch's state on disk.
+	closeApp = func() { frame.Close() }
 
 	// Order: panels first so the toolbar can capture references to
 	// the editor tabs and design canvas, wiring Open / Save buttons
@@ -166,17 +171,8 @@ func main() {
 	// launch restores the user's geometry instead of bouncing through
 	// a default.
 	frame.SetClosedCallback(func(*gui.Frame) {
-		if win := frame.Window(); win != nil {
-			x, y, w, h := win.Bounds()
-			prefs.SetWindowSize(int(w), int(h))
-			prefs.SetWindowPos(int(x), int(y))
-		}
-		// Persist the open file set so the next launch reopens it
-		// (Qt Creator-style session restore). Mirrors the window-geometry
-		// save right above — both are last-known-good state captured on
-		// close and replayed at startup.
-		prefs.SetOpenSession(currentSessionPaths(designCanvas))
-		core.Quit()
+		persistSessionState(frame, designCanvas, prefs)
+		quitApp()
 	})
 
 	if win := frame.Window(); win != nil {
@@ -1698,6 +1694,11 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 // main(). openFromTree's recordRecentFile reaches it without
 // threading another argument through every call site.
 var globalPrefs *preferences
+
+// closeApp closes the main frame, and through it runs the teardown that
+// persists the session. Set by main(); registerShortcuts also runs in unit
+// tests that never build a frame, so the Cmd+Q handler checks it first.
+var closeApp func()
 
 // globalReloader watches every .silkui file silkide opens for
 // external edits and re-applies them to the design canvas. Lazily
@@ -3491,6 +3492,27 @@ func currentSessionPaths(canvas *ged.GedView) []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// persistSessionState writes the state the next launch replays: the final
+// window geometry and the open file set. Every gesture that ends a silkide
+// session has to run it, which is why it has a name — inline in the closed
+// callback it was invisible, and Cmd+Q used to exit without it and leave the
+// previous launch's session on disk.
+//
+// The window guard keeps it callable off a frame that never attached one, so
+// the open file set is still saved when there is no geometry to save.
+func persistSessionState(frame *gui.Frame, canvas *ged.GedView, prefs *preferences) {
+	if win := frame.Window(); win != nil {
+		x, y, w, h := win.Bounds()
+		prefs.SetWindowSize(int(w), int(h))
+		prefs.SetWindowPos(int(x), int(y))
+	}
+	// Persist the open file set so the next launch reopens it
+	// (Qt Creator-style session restore). Mirrors the window-geometry
+	// save right above — both are last-known-good state captured on
+	// close and replayed at startup.
+	prefs.SetOpenSession(currentSessionPaths(canvas))
 }
 
 // restoreSession reopens the files persisted by SetOpenSession on the
