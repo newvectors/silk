@@ -1,6 +1,8 @@
 package ged
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,13 +63,14 @@ func TestGeneratedCodeCoversNewlyPlaceableWidgets(t *testing.T) {
 	vetGeneratedCode(t, gen.Code)
 }
 
-// TestGeneratedCodeReproducesDesignedButtons is the two-sided assertion for the
-// ButtonBox design property, made at the emitter rather than at the table: a
-// designed button list must reach the generated screen, and the list a dropped
-// ButtonBox already carries must not be written out again. The second half is
-// what makes setDefaultContent's "buttonbox" case load-bearing — drop it and
-// the reference default becomes the empty spec, so every untouched ButtonBox
-// emits a SetButtonsSpec nobody asked for.
+// TestGeneratedCodeReproducesDesignedButtons checks the generated source against
+// the box the designer drew, in both shapes a design produces: the OK/Cancel row
+// a drop already carries, and a list typed into the property sheet afterwards.
+// The first is the one that bites. The generated file builds the box with
+// gui.NewButtonBox(), which carries no buttons at all, so a ButtonBox measured
+// against the canvas default instead of that constructor reads as unchanged and
+// the standard button row — the whole point of dropping one — exists only in the
+// designer.
 func TestGeneratedCodeReproducesDesignedButtons(t *testing.T) {
 	scene := NewGedScene()
 	scene.SetFormTitle("Buttons")
@@ -82,20 +85,56 @@ func TestGeneratedCodeReproducesDesignedButtons(t *testing.T) {
 		t.Fatalf("as-dropped ButtonBox spec = %q, want %q", got, "@ok,@cancel")
 	}
 
-	box.SetButtonsSpec("@yes,@no")
-	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "ButtonsUI"})
-	const want = `ui.ButtonBox1.SetButtonsSpec("@yes,@no")`
-	if !strings.Contains(code, want) {
-		t.Errorf("designed buttons not reproduced: missing %s\n----\n%s", want, code)
-	}
+	// Exactly what the drop produced, untouched by the designer.
+	assertGeneratedButtons(t, scene, box)
 
-	// Back to exactly what the drop produced: nothing was designed, so nothing
-	// is emitted.
-	box.SetButtonsSpec("@ok,@cancel")
-	code = scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "ButtonsUI"})
-	if strings.Contains(code, "SetButtonsSpec(") {
-		t.Errorf("an untouched ButtonBox emitted a SetButtonsSpec call\n----\n%s", code)
+	box.SetButtonsSpec("@yes,@no")
+	assertGeneratedButtons(t, scene, box)
+}
+
+// assertGeneratedButtons generates the scene and compares the button spec the
+// source carries against the one the designed box holds. Both sides are read
+// off the live objects — the emitter's output and the widget the canvas shows —
+// so a hardcoded expectation cannot agree with a broken emitter.
+func assertGeneratedButtons(t *testing.T, scene *GedScene, box *gui.ButtonBox) {
+	t.Helper()
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "ButtonsUI"})
+	got, ok := generatedButtonSpec(code)
+	if !ok {
+		t.Fatalf("generated program builds an empty ButtonBox: no SetButtonsSpec call, so the designed buttons %v never reach the screen\n----\n%s",
+			buttonLabels(box), code)
 	}
+	if want := box.ButtonsSpec(); got != want {
+		t.Errorf("generated ButtonBox spec = %q, design has %q (buttons %v)\n----\n%s", got, want, buttonLabels(box), code)
+	}
+}
+
+var buttonSpecCall = regexp.MustCompile(`SetButtonsSpec\(("[^"]*")\)`)
+
+// generatedButtonSpec reads the button list back out of generated source: the
+// argument of the SetButtonsSpec call codegen writes for the scene's one box.
+func generatedButtonSpec(code string) (string, bool) {
+	m := buttonSpecCall.FindStringSubmatch(code)
+	if m == nil {
+		return "", false
+	}
+	spec, err := strconv.Unquote(m[1])
+	if err != nil {
+		return "", false
+	}
+	return spec, true
+}
+
+// buttonLabels is what the designed box puts on screen, so a failure names the
+// buttons that went missing and not just a spec string.
+func buttonLabels(box *gui.ButtonBox) []string {
+	var out []string
+	for _, item := range box.Items() {
+		if b, ok := item.(*gui.Button); ok {
+			out = append(out, b.Text())
+		}
+	}
+	return out
 }
 
 // TestGeneratedCodeReproducesDesignedSpace is the same two-sided assertion for

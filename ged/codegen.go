@@ -1127,6 +1127,35 @@ var industrialDesignProps = map[string][]designProp{
 	"gui.ButtonBox": {{"ButtonsSpec", "SetButtonsSpec", dpString}},
 }
 
+// contentDefaultFactories names the widgets whose as-dropped content is the
+// design rather than sample decoration, so their reference defaults are built
+// without setDefaultContent. The generated file builds every widget with the
+// plain constructor, and gui.NewButtonBox() carries no buttons at all: compared
+// against the canvas, a dropped OK/Cancel row reads as unchanged and the
+// program gets an empty box where the design shows two buttons.
+var contentDefaultFactories = map[string]bool{
+	"gui.ButtonBox": true,
+}
+
+// referenceDefaults builds the instance a designed widget is compared against,
+// so only what the designer changed is emitted. It is built exactly as a
+// freshly-dragged widget is (factory.New + setDefaultContent), so as-dragged
+// decoration like a Gauge's "%" unit is recognised as unchanged; core.New alone
+// skips setDefaultContent and would misreport it as an edit. Widgets in
+// contentDefaultFactories are the exception and get the bare factory instance —
+// what their generated constructor produces. Returns nil for an unknown
+// factory.
+func referenceDefaults(factoryName string) interface{} {
+	if contentDefaultFactories[factoryName] {
+		return core.New(factoryName)
+	}
+	refFake, err := NewFakeWidgetFromFactory(factoryName)
+	if err != nil || refFake.Widget() == nil {
+		return nil
+	}
+	return refFake.Widget()
+}
+
 // emitDesignProperties emits setter calls for the design-time properties an
 // industrial widget's designer changed from the widget's defaults. Values are
 // read reflectively from the live designed widget and compared against a fresh
@@ -1137,16 +1166,12 @@ func emitDesignProperties(buf *strings.Builder, imports map[string]bool, factory
 	if len(props) == 0 || widget == nil {
 		return
 	}
-	// Reference defaults must be built exactly as a freshly-dragged widget is
-	// (factory.New + setDefaultContent), so as-dragged defaults like a Gauge's
-	// "%" unit are recognised as unchanged. core.New alone skips
-	// setDefaultContent and would misreport them as edits.
-	refFake, err := NewFakeWidgetFromFactory(factoryName)
-	if err != nil || refFake.Widget() == nil {
+	ref := referenceDefaults(factoryName)
+	if ref == nil {
 		return
 	}
 	dv := reflect.ValueOf(widget)
-	rv := reflect.ValueOf(refFake.Widget())
+	rv := reflect.ValueOf(ref)
 	for _, p := range props {
 		getM := dv.MethodByName(p.getter)
 		refM := rv.MethodByName(p.getter)
