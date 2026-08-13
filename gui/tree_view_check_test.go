@@ -233,6 +233,40 @@ func TestTreeViewCheckBandsAreDisjoint(t *testing.T) {
 	}
 }
 
+// TestTreeViewCheckColumnOffLeavesTheBandToTheContent: with the check column off
+// the strip right of the expander belongs to the icon and text — drawCol0Cell
+// only shifts them right by a band when the column is on. Nothing may claim that
+// strip in the hit test: a check band reported regardless of checkBoxVisible
+// turns it into a dead zone on every default TreeView in the repo, because
+// OnLeftDown takes the check branch and returns without selecting or activating.
+// Both a parent and a leaf are clicked: a check band wrongly guarded like the
+// expander (row.indent >= 0 && rowHasChildren) would leave one of the two live.
+func TestTreeViewCheckColumnOffLeavesTheBandToTheContent(t *testing.T) {
+	f := newCheckTree(t)
+	f.tv.SetCheckBoxVisible(false)
+
+	var activated []string
+	f.tv.SetActivatedCallback(func(o interface{}, mi ModelIndex) {
+		activated = append(activated, f.label(mi))
+	})
+
+	// A0 has children, A0a is a leaf. checkX is the band the check box occupies
+	// when the column is on, which is where the content starts when it is off.
+	for _, name := range []string{"A0", "A0a"} {
+		f.clickAt(t, name, f.checkX(t, name))
+		if got, want := f.tv.CurrentIndex(), f.mi(name); got != want {
+			t.Errorf("check column off, click right of %s's expander: current row = %q, want %q "+
+				"(that strip is content, not a check band)", name, f.label(got), f.label(want))
+		}
+	}
+	if want := []string{"A0", "A0a"}; !eqStrings(activated, want) {
+		t.Errorf("check column off, clicks right of the expander: activations = %v, want %v", activated, want)
+	}
+
+	// And the hidden column's state was not toggled behind the user's back.
+	f.wantStates(t, "clicking right of the expander with the check column off", map[string]int{})
+}
+
 // TestTreeViewCheckMousePropagatesThroughHierarchy drives the mouse through the
 // check band and pins the propagation in both directions:
 //   - down: checking A reaches the grandchildren and stops at the sibling subtree
@@ -287,6 +321,33 @@ func TestTreeViewCheckMousePropagatesThroughHierarchy(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("CheckedIndexes() = %v, want %v (position %d)", f.labels(got), f.labels(want), i)
 		}
+	}
+}
+
+// TestTreeViewCheckOneLeafInAnUncheckedTreeMakesAncestorsPartial is the feature's
+// opening move: an untouched tree and the user ticks one grandchild. A's
+// recompute is the load-bearing one — none of A's own children is checked (A0 is
+// partial, A1 is untouched), so a recompute that only counts checked children
+// reads A as unchecked and the partial marker never reaches the root. The cases
+// above all start from a fully checked tree, where A always has a checked child
+// and that reading is indistinguishable from the right one.
+func TestTreeViewCheckOneLeafInAnUncheckedTreeMakesAncestorsPartial(t *testing.T) {
+	f := newCheckTree(t)
+
+	f.clickAt(t, "A0a", f.checkX(t, "A0a"))
+	f.wantStates(t, "after checking the single leaf A0a in an unchecked tree", map[string]int{
+		"A":   TVC_PARTIAL,
+		"A0":  TVC_PARTIAL,
+		"A0a": TVC_CHECKED,
+	})
+
+	// The partial ancestors are not checked rows: a recompute that marks them
+	// both checked and partial still reads as TVC_PARTIAL above, but leaks them
+	// into CheckedIndexes.
+	got := f.tv.CheckedIndexes()
+	if want := []ModelIndex{f.mi("A0a")}; len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("CheckedIndexes() = %v, want %v (partial ancestors do not count)",
+			f.labels(got), f.labels(want))
 	}
 }
 
