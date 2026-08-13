@@ -170,10 +170,7 @@ func main() {
 	// Persist the final window size + position on close so the next
 	// launch restores the user's geometry instead of bouncing through
 	// a default.
-	frame.SetClosedCallback(func(*gui.Frame) {
-		persistSessionState(frame, designCanvas, prefs)
-		quitApp()
-	})
+	installClosedPersist(frame, designCanvas, prefs)
 
 	if win := frame.Window(); win != nil {
 		w, h := prefs.WindowSize()
@@ -1201,6 +1198,22 @@ func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
 		return
 	}
 	frame.SetCanCloseCallback(func(*gui.Frame) bool { return canQuit(canvas) })
+}
+
+// installClosedPersist hangs the end-of-session writes off the frame's closed
+// callback: the state the next launch replays, then the end of the event loop.
+// Every quit gesture reaches it, since both of them go out through Frame.Close.
+//
+// Named rather than written inline in main() for the same reason
+// persistSessionState is: a test can only drive the wiring the running IDE
+// actually installs if that wiring has a name. Re-declared in a harness it goes
+// on passing while this one loses the canvas — and with it the open design —
+// or the persist call entirely.
+func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferences) {
+	frame.SetClosedCallback(func(*gui.Frame) {
+		persistSessionState(frame, canvas, prefs)
+		quitApp()
+	})
 }
 
 // lspDidCloseFile notifies gopls a document closed and drops its client-side
