@@ -689,10 +689,10 @@ func (this *GedView) OnRightUp(x, y float64) {
 		// 2 selected items.
 		lMenu, _ := menu.AddSubMenu("布局", nil, nil)
 		lMenu.AddButton1("垂直布局 (VBox)", nil).Action().BindFunc0(func() {
-			this.layOutSelection(false)
+			this.LayOutSelection(false)
 		})
 		lMenu.AddButton1("水平布局 (HBox)", nil).Action().BindFunc0(func() {
-			this.layOutSelection(true)
+			this.LayOutSelection(true)
 		})
 		lMenu.AddSeparator()
 		// "Break Layout" — the inverse of Lay Out: dissolve the selected
@@ -700,7 +700,7 @@ func (this *GedView) OnRightUp(x, y float64) {
 		// parent (Qt Designer's "Break Layout"). No-op when no selected
 		// item is a container with children.
 		lMenu.AddButton1("解散布局 (Break)", nil).Action().BindFunc0(func() {
-			this.breakLayoutSelection()
+			this.BreakLayoutSelection()
 		})
 
 		menu.AddSeparator()
@@ -1469,7 +1469,7 @@ func hasSelectedAncestor(it graph.IItem, set map[graph.IItem]bool) bool {
 }
 
 // boundingBoxOf returns the smallest rect enclosing all of rects. Empty
-// input returns the zero rect. Pure helper so layOutSelection's geometry
+// input returns the zero rect. Pure helper so LayOutSelection's geometry
 // is unit-testable without a scene.
 func boundingBoxOf(rects []geom.Rect) geom.Rect {
 	if len(rects) == 0 {
@@ -1494,18 +1494,17 @@ func boundingBoxOf(rects []geom.Rect) geom.Rect {
 	return geom.Rect{X: minX, Y: minY, Width: maxX - minX, Height: maxY - minY}
 }
 
-// layOutSelection wraps the current multi-selection in a new VBox (or
+// LayOutSelection wraps the current multi-selection in a new VBox (or
 // HBox when horizontal) container and reparents the selected widgets
 // into it, so codegen arranges them through the container's AddWidget
 // path. The container is sized to the selection's bounding box and the
 // children are reparented in layout order (top-to-bottom for a VBox,
 // left-to-right for an HBox). The new container becomes the selection.
 //
-// Like the other structural designer ops (Z-order, align, nudge), this
-// mutates the scene directly without an undo command — wrapping it in a
-// composite create+reparent command is a follow-up. No-op below 2
-// selected items.
-func (this *GedView) layOutSelection(horizontal bool) {
+// The whole wrap goes onto the undo stack as one ReparentCommand, which
+// is also how the 布局 menu tells an applied layout from a declined one.
+// No-op below 2 selected items.
+func (this *GedView) LayOutSelection(horizontal bool) {
 	raw := this.Selection().ItemList()
 
 	// Guard the selection before reparenting anything:
@@ -1591,7 +1590,7 @@ func (this *GedView) layOutSelection(horizontal bool) {
 	this.Self().Update()
 }
 
-// breakLayoutSelection is the inverse of layOutSelection: for every
+// BreakLayoutSelection is the inverse of LayOutSelection: for every
 // selected container widget it lifts the children back up to the
 // container's own parent and removes the now-empty container (Qt
 // Designer's "Break Layout"). Children keep their absolute designer
@@ -1600,9 +1599,8 @@ func (this *GedView) layOutSelection(horizontal bool) {
 //
 // Only *FakeWidget items that actually hold children are affected;
 // anything else in the selection is ignored, so the action is a no-op
-// when nothing container-like is selected. Like the other structural
-// ops it mutates directly without an undo command.
-func (this *GedView) breakLayoutSelection() {
+// when nothing container-like is selected — and a no-op pushes nothing.
+func (this *GedView) BreakLayoutSelection() {
 	raw := this.Selection().ItemList()
 	var freed []graph.IItem
 	// One undoable command for the whole break: per container, lift each

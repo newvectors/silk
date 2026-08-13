@@ -40,7 +40,7 @@ func TestNestedContainerEndToEnd(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	if n := len(scene.Children()); n != 1 {
 		t.Fatalf("after layout, scene top-level = %d, want 1 container", n)

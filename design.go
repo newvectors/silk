@@ -569,119 +569,63 @@ func sendToBack() {
 // Layout operations (Feature 3: Qt Creator-style layout tools)
 // ---------------------------------------------------------------------------
 
-// applyHBoxLayout wraps selected widgets into a horizontal box container.
+// applyHBoxLayout and applyVBoxLayout wrap the selection in a container through
+// the canvas's own lay-out path, the one the right-click 布局 menu uses. The menu
+// used to wrap the widgets here instead: it detached every selected widget and
+// pushed an AddCommand holding only the empty container, so the widgets were
+// gone from the design and Ctrl+Z — which knew about nothing but the
+// container — could not bring them back.
+//
+// GedView.LayOutSelection returns without a word when fewer than two selected
+// items are layout-eligible (position-locked widgets and children of a selected
+// container drop out), so both handlers watch the undo stack to tell an applied
+// layout from a declined one: no command pushed, nothing happened.
 func applyHBoxLayout() {
-	applyContainerLayout("gui.HBox", "hbox")
-}
-
-// applyVBoxLayout wraps selected widgets into a vertical box container.
-func applyVBoxLayout() {
-	applyContainerLayout("gui.VBox", "vbox")
-}
-
-// applyGridLayout wraps selected widgets into a grid layout container.
-func applyGridLayout() {
-	applyContainerLayout("gui.GridLayout", "gridLayout")
-}
-
-// applyContainerLayout wraps the selected widgets into the given container type.
-func applyContainerLayout(factoryName, defaultName string) {
 	gv := requireSelection()
 	if gv == nil {
 		return
 	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		reportDeclined("请至少选择2个控件来应用布局")
+	stack := gv.Scene().UndoStack()
+	before := stack.Current()
+	gv.LayOutSelection(true)
+	if stack.Current() == before {
+		reportDeclined("请至少选择2个可布局的控件来应用布局")
 		return
 	}
-
-	// Calculate bounding box of selected items
-	minX, minY := items[0].X(), items[0].Y()
-	maxX, maxY := items[0].X()+items[0].Width(), items[0].Y()+items[0].Height()
-	for _, it := range items[1:] {
-		if it.X() < minX {
-			minX = it.X()
-		}
-		if it.Y() < minY {
-			minY = it.Y()
-		}
-		if it.X()+it.Width() > maxX {
-			maxX = it.X() + it.Width()
-		}
-		if it.Y()+it.Height() > maxY {
-			maxY = it.Y() + it.Height()
-		}
-	}
-
-	// Create the container at bounding box position with some padding
-	container, err := ged.NewFakeWidgetFromFactory(factoryName)
-	if err != nil {
-		reportDeclined("无法创建布局容器: " + err.Error())
-		return
-	}
-	padding := 2.0
-	container.SetBounds(minX-padding, minY-padding, (maxX-minX)+padding*2, (maxY-minY)+padding*2)
-	container.SetWidgetName(defaultName)
-	container.Layout()
-
-	// Remove the original items from the scene
-	for _, it := range items {
-		it.Detach()
-	}
-
-	// Add the container to the scene
-	cmd := graph.NewAddCommand()
-	cmd.AddItem(container, gv.Scene())
-	gv.Scene().PushCommand(cmd)
-
-	gv.Selection().Clear()
-	gv.Selection().Add(container)
-	gv.Self().Update()
-
-	setStatus(fmt.Sprintf("已将 %d 个控件包装到 %s 布局中", len(items), defaultName))
+	setStatus("已应用水平布局 (HBox)")
 }
 
-// breakLayout removes a layout container and places its child widgets back
-// on the canvas at their current positions. If the selected item is a layout
-// container, it is removed and replaced by a status message.
+func applyVBoxLayout() {
+	gv := requireSelection()
+	if gv == nil {
+		return
+	}
+	stack := gv.Scene().UndoStack()
+	before := stack.Current()
+	gv.LayOutSelection(false)
+	if stack.Current() == before {
+		reportDeclined("请至少选择2个可布局的控件来应用布局")
+		return
+	}
+	setStatus("已应用垂直布局 (VBox)")
+}
+
+// breakLayout dissolves the selected layout container(s), lifting the children
+// back up to the container's own parent. The canvas path does that in one
+// undoable command; the version that used to live here detached the container
+// itself, which took every child with it and left the undo stack empty.
 func breakLayout() {
 	gv := requireSelection()
 	if gv == nil {
 		return
 	}
-	items := gv.Selection().ItemList()
-	if len(items) != 1 {
-		reportDeclined("请选择一个布局容器来打破布局")
-		return
-	}
-
-	item := items[0]
-	fw, ok := item.(*ged.FakeWidget)
-	if !ok {
-		reportDeclined("选中的对象不是控件")
-		return
-	}
-
-	// Check if this is a layout/container widget
-	factory := fw.WidgetFactoryName()
-	isLayout := false
-	for _, name := range []string{"gui.HBox", "gui.VBox", "gui.GridLayout", "gui.FormLayout"} {
-		if factory == name {
-			isLayout = true
-			break
-		}
-	}
-	if !isLayout {
+	stack := gv.Scene().UndoStack()
+	before := stack.Current()
+	gv.BreakLayoutSelection()
+	if stack.Current() == before {
 		reportDeclined("选中的控件不是布局容器")
 		return
 	}
-
-	// Remove the layout container
-	item.Detach()
-	gv.Selection().Clear()
-	gv.Self().Update()
-
 	setStatus("布局已打破")
 }
 
@@ -1409,7 +1353,6 @@ func createMenuBar(mainFrame *gui.Frame) {
 	layoutMenu, _ := mainMenu.AddSubMenu("布局", nil, nil)
 	needSelection(layoutMenu.AddButton1("应用水平布局 (HBox)", nil), 2, 0).BindFunc0(applyHBoxLayout)
 	needSelection(layoutMenu.AddButton1("应用垂直布局 (VBox)", nil), 2, 0).BindFunc0(applyVBoxLayout)
-	needSelection(layoutMenu.AddButton1("应用网格布局 (Grid)", nil), 2, 0).BindFunc0(applyGridLayout)
 	layoutMenu.AddWidget(gui.NewSeparator())
 	needSelection(layoutMenu.AddButton1("打破布局", nil), 1, 1).BindFunc0(breakLayout)
 

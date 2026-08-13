@@ -17,7 +17,7 @@ func TestLayOutUndoRedo(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	// Applied: one container holding both.
 	if len(scene.Children()) != 1 {
@@ -76,7 +76,7 @@ func TestBreakLayoutUndoRedo(t *testing.T) {
 	sel := view.Selection()
 	sel.Clear()
 	sel.Add(vbox)
-	view.breakLayoutSelection()
+	view.BreakLayoutSelection()
 
 	// Applied: flat (container gone, a + b at top).
 	if len(scene.Children()) != 2 {
@@ -124,8 +124,8 @@ func TestLayOutThenBreakUndoChain(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false) // group
-	view.breakLayoutSelection() // ungroup (container is selected after layout)
+	view.LayOutSelection(false) // group
+	view.BreakLayoutSelection() // ungroup (container is selected after layout)
 
 	// Net effect is flat again.
 	if len(scene.Children()) != 2 {

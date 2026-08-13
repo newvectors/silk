@@ -52,7 +52,7 @@ func TestLayOutSelectionWrapsInVBox(t *testing.T) {
 	sel.Add(mid)
 	sel.Add(bot)
 
-	view.layOutSelection(false) // vertical → VBox
+	view.LayOutSelection(false) // vertical → VBox
 
 	// Scene now has exactly one top-level child: the VBox container.
 	top0 := scene.Children()
@@ -119,7 +119,7 @@ func TestLayOutSelectionHBoxSortsByX(t *testing.T) {
 	sel.Add(r)
 	sel.Add(l)
 
-	view.layOutSelection(true) // horizontal → HBox
+	view.LayOutSelection(true) // horizontal → HBox
 
 	container := scene.Children()[0].(*FakeWidget)
 	if container.WidgetFactoryName() != "gui.HBox" {
@@ -148,7 +148,7 @@ func TestLayOutSelectionNoOpBelowTwo(t *testing.T) {
 	sel.Clear()
 	sel.Add(w)
 
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	// Still just the original widget at the scene top level; no container.
 	if n := len(scene.Children()); n != 1 {

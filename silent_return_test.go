@@ -21,7 +21,7 @@ var commandHandlers = []string{
 	"onUndo", "onRedo", "onDelete", "onSelectAll",
 	"onCut", "onCopy", "onPaste", "onDuplicate",
 	"alignSelection", "sameSizeSelection", "bringToFront", "sendToBack",
-	"applyContainerLayout", "breakLayout",
+	"applyHBoxLayout", "applyVBoxLayout", "breakLayout",
 	"onPreview", "onExportCode", "onRun",
 	"onFormSettings", "onTagDictionary", "onToggleGuides",
 }

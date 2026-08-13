@@ -121,7 +121,6 @@ func TestSelectionCommandsFollowSelectionSize(t *testing.T) {
 		"置于底层":          func(n int) bool { return n >= 1 },
 		"应用水平布局 (HBox)": func(n int) bool { return n >= 2 },
 		"应用垂直布局 (VBox)": func(n int) bool { return n >= 2 },
-		"应用网格布局 (Grid)": func(n int) bool { return n >= 2 },
 		"打破布局":          func(n int) bool { return n == 1 },
 	}
 	menuItems := append(submenuButtons(t, f.MainMenu(), "排列"),

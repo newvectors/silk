@@ -37,7 +37,7 @@ func TestLayOutSelectionSkipsLocked(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	if n := len(scene.Children()); n != 2 {
 		t.Fatalf("scene children = %d, want 2 (no container — locked item left only 1 eligible)", n)
@@ -63,7 +63,7 @@ func TestLayOutSelectionSkipsSceneRoot(t *testing.T) {
 	sel.Add(graph.IItem(scene)) // pathological: scene root in the selection
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	// Scene root survives at top with one new container holding a + b.
 	top := scene.Children()
@@ -98,7 +98,7 @@ func TestLayOutSelectionSkipsNestedAncestor(t *testing.T) {
 	sel.Add(vbox)
 	sel.Add(child) // ancestor (vbox) also selected → must be dropped
 	sel.Add(other)
-	view.layOutSelection(false)
+	view.LayOutSelection(false)
 
 	// New container wraps vbox + other (2), NOT child.
 	top := scene.Children()

@@ -24,7 +24,7 @@ func TestBreakLayoutDissolvesContainer(t *testing.T) {
 	sel := view.Selection()
 	sel.Clear()
 	sel.Add(vbox)
-	view.breakLayoutSelection()
+	view.BreakLayoutSelection()
 
 	// Scene now holds the two freed widgets directly; the container is gone.
 	top := scene.Children()
@@ -61,13 +61,13 @@ func TestBreakLayoutRoundTrip(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.layOutSelection(false) // group into VBox
+	view.LayOutSelection(false) // group into VBox
 	if len(scene.Children()) != 1 {
 		t.Fatalf("after layout, scene top-level = %d, want 1 container", len(scene.Children()))
 	}
 
 	// The container is now selected; break it.
-	view.breakLayoutSelection()
+	view.BreakLayoutSelection()
 	top := scene.Children()
 	if len(top) != 2 {
 		t.Fatalf("after break, scene top-level = %d, want 2 (flat again)", len(top))
@@ -91,7 +91,7 @@ func TestBreakLayoutNoOpWithoutContainer(t *testing.T) {
 	sel.Clear()
 	sel.Add(a)
 	sel.Add(b)
-	view.breakLayoutSelection()
+	view.BreakLayoutSelection()
 
 	if len(scene.Children()) != 2 {
 		t.Errorf("break with no container should be a no-op; scene children = %d, want 2", len(scene.Children()))
@@ -118,7 +118,7 @@ func TestBreakLayoutNested(t *testing.T) {
 	sel := view.Selection()
 	sel.Clear()
 	sel.Add(outer)
-	view.breakLayoutSelection()
+	view.BreakLayoutSelection()
 
 	// outer dissolved → inner now sits at scene level, still holding leaf.
 	top := scene.Children()
