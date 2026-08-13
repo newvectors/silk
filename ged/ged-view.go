@@ -1319,8 +1319,9 @@ func frameAlignDelta(box, frame geom.Rect, mode AlignMode) (dx, dy float64) {
 //     and a widget already riding along that way is out of the extremes as
 //     well as out of the command; see the comment on movers.
 //     Position-locked items are left where they are, as on every other move
-//     path — but they still count in the extremes, and 分布 refuses outright
-//     rather than spread the rest around one; see the two comments below.
+//     path — but they still count in the extremes an edge mode lines up on,
+//     while a mean mode averages only over what moves, and 分布 refuses
+//     outright rather than spread the rest around one; see the comments below.
 //   - 居中 (AlignCenter), and any mode with a single item selected: there are
 //     no selection extremes worth aligning to, so the reference is the frame —
 //     the container the items live in, or the form when they sit at the root.
@@ -1370,14 +1371,17 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 	// to N-1, which is how a 水平分布 over a container, a widget inside it and
 	// two others came out spaced for four things and moved three.
 	//
-	// This is the opposite of the rule position locks get, and the difference
-	// is whether the rect moves: a locked item STAYS, so its edge is a real
-	// fixed edge and making the group align to it is the point of pinning it
-	// (see the two comments below). A carried item's edge leaves with its
-	// container. That holds for the align modes as much as for 分布 — the mean
-	// of AlignHCenter is a balance point over the widgets that swing to it, and
-	// a child hanging over its container's left edge would otherwise set the
-	// AlignLeft line and then walk off it.
+	// Position locks drop out somewhere else, and where depends on what the
+	// mode computes. An edge mode names a line one rect already owns: a locked
+	// item STAYS, so its edge is a real fixed edge of the selection and making
+	// the group align to it is the point of pinning it — it keeps its say in
+	// the geometry here (see the comments below). A mean mode has no such
+	// owner; the centre it computes is a balance point over the widgets that
+	// swing ONTO it, so a rect that will not move must not pull on it, and the
+	// locked movers are filtered out just below. A carried item's edge leaves
+	// with its container under either rule — a child hanging over its
+	// container's left edge would otherwise set the AlignLeft line and then
+	// walk off it.
 	movers := make([]graph.IItem, 0, len(items))
 	moverRects := make([]geom.Rect, 0, len(items))
 	for i, it := range items {
@@ -1387,7 +1391,39 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 		movers = append(movers, it)
 		moverRects = append(moverRects, rects[i])
 	}
-	aligned, clamped := alignRects(moverRects, mode)
+	// 水平/垂直居中 averages over what will actually swing onto the line, so a
+	// position-locked mover is out of the average as well: it keeps its place,
+	// and its vote drags the line off the widgets that do move — a pinned
+	// centre of 10 next to free centres of 100 and 130 lands the free pair on
+	// 80 instead of meeting each other at 115. The locked movers stay in
+	// movers and keep their own rect, so the skip in the loop below has
+	// nothing left to do for them. Every other mode gets the full set.
+	//
+	// One free mover left after the filter means the mean is that widget's own
+	// centre: alignRects hands a lone rect straight back and the empty command
+	// is dropped below, so 居中 over one widget and one pinned neighbour does
+	// nothing rather than snapping the free one onto the pinned one.
+	var aligned []geom.Rect
+	var clamped bool
+	if mode == AlignHCenter || mode == AlignVCenter {
+		freeRects := make([]geom.Rect, 0, len(movers))
+		freeIdx := make([]int, 0, len(movers))
+		for i, it := range movers {
+			if it.IsLockPos() {
+				continue
+			}
+			freeRects = append(freeRects, moverRects[i])
+			freeIdx = append(freeIdx, i)
+		}
+		free, _ := alignRects(freeRects, mode)
+		aligned = make([]geom.Rect, len(moverRects))
+		copy(aligned, moverRects)
+		for k, i := range freeIdx {
+			aligned[i] = free[k]
+		}
+	} else {
+		aligned, clamped = alignRects(moverRects, mode)
+	}
 
 	// 分布 is one joint constraint, not N independent targets: the gaps only
 	// come out even if every item takes the slot distributeAxis gave it. A
@@ -1424,11 +1460,13 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 		// (GenerateMoveCommand, snapSelectionToGrid); 对齐 is a move like any
 		// other and does too — the lock was never meant to mean "unless you
 		// reach it from the align menu".
-		// The item still counts in alignRects' geometry above, deliberately:
-		// its edge is a real edge of the selection, so locking the extreme
-		// widget makes it the line everyone else aligns to — which is what
-		// pinning it was for — and dropping it from the geometry would instead
-		// send the group sailing past it.
+		// Under an edge mode the item still counts in alignRects' geometry
+		// above, deliberately: its edge is a real edge of the selection, so
+		// locking the extreme widget makes it the line everyone else aligns to
+		// — which is what pinning it was for — and dropping it from the
+		// geometry would instead send the group sailing past it. Under a mean
+		// mode it was kept out of the average and carries its own rect, so this
+		// skip is the branch that has nothing to do.
 		if it.IsLockPos() {
 			continue
 		}
