@@ -226,6 +226,71 @@ func TestTableDrawAltRowFillIsThemeDerived(t *testing.T) {
 	}
 }
 
+// TestTableDrawSelectedRowInkFollowsFill drives the real Table.Draw under dark
+// mode with row 1 selected and reads the brush that was live at each text draw.
+// The alt-row test above builds a table with nothing selected, so it never
+// reaches the selected branch: without this, Table.Draw could go back to filling
+// the row with HighLightColor and then drawing its text in TextColor — zinc-200
+// on blue-400 — with every selectionTextColor test still green.
+func TestTableDrawSelectedRowInkFollowsFill(t *testing.T) {
+	orig := CurrentThemeMode()
+	t.Cleanup(func() { SetThemeMode(orig) })
+	SetThemeMode(ThemeDark)
+
+	const cols = 2
+	tbl := NewTable()
+	m := NewSimpleTableModel([]string{"name", "age"})
+	m.AddRow("Alice", "25")
+	m.AddRow("Bob", "40")
+	tbl.SetModel(m)
+	// Same geometry as the alt-row test: header plus both rows, no scroll bars.
+	tbl.SetBounds(0, 0, 400, 300)
+	tbl.Layout()
+	tbl.SetSelectedRow(1)
+
+	rec := newRowInkRecorder()
+	tbl.Draw(rec)
+
+	// Every header and every cell carries text, and Draw lays them down in
+	// order: the header row first, then row 0, then the selected row 1.
+	if len(rec.inks) != cols*3 {
+		t.Fatalf("expected %d text draws (header + 2 rows, %d columns each), got %d (%v)",
+			cols*3, cols, len(rec.inks), rec.inks)
+	}
+	th := Theme()
+	plain, selected := rec.inks[cols:cols*2], rec.inks[cols*2:]
+	if plain[0] == selected[0] {
+		t.Fatalf("dark: row 0 and the selected row 1 are both drawn in %v; "+
+			"the selected row keeps the view surface's ink on its HighLightColor %v fill",
+			plain[0], th.HighLightColor)
+	}
+	for c := 0; c < cols; c++ {
+		if want := selectionTextColor(th, false); plain[c] != want {
+			t.Errorf("dark: unselected row 0 column %d ink = %v, want %v", c, plain[c], want)
+		}
+		if want := selectionTextColor(th, true); selected[c] != want {
+			t.Errorf("dark: selected row 1 column %d ink = %v, want selectionTextColor(true) = %v",
+				c, selected[c], want)
+		}
+	}
+
+	// And the row that got the highlight fill is the row that got the selected
+	// ink — the fill and the ink must not disagree about which row it is.
+	rh := tbl.RowHeight()
+	found := false
+	for _, f := range rec.fills {
+		if f.color == th.HighLightColor {
+			if f.y != rh {
+				t.Errorf("highlight fill landed at y=%.0f, want the selected row 1 at y=%.0f", f.y, rh)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no HighLightColor fill recorded; row 1 was never highlighted")
+	}
+}
+
 // TestListWidgetDrawSelectedRowInkFollowsFill drives the real ListWidget.Draw
 // under dark mode with row 1 selected. The fill and the text used to be decided
 // by two separate expressions, so the highlighted row kept TextColor — zinc-200
