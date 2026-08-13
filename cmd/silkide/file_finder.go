@@ -185,13 +185,12 @@ func showFileFinder(parent gui.IWidget, root string, tabs *gui.TabWidget) {
 	box.AddWidget(list)
 
 	repopulate := func(query string) {
-		list.Clear()
-		for _, f := range rankFiles(files, query) {
-			list.Append(gui.ListItem{Text: f.Display, Data: f})
+		ranked := rankFiles(files, query)
+		items := make([]gui.ListItem, 0, len(ranked))
+		for _, f := range ranked {
+			items = append(items, gui.ListItem{Text: f.Display, Data: f})
 		}
-		if list.Count() > 0 {
-			list.SetSelectionVisible(true)
-		}
+		fillFinderList(list, items)
 	}
 	repopulate("")
 

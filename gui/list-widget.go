@@ -311,6 +311,10 @@ func (this *ListWidget) RemoveLast() ListItem {
 	return this.Remove(len(this.items) - 1)
 }
 
+// Clear drops every item, and the selection with them: ActiveIndex goes back
+// to -1. Draw only highlights a row that is the active one, so a caller that
+// repopulates the list right after has to re-select (SetActiveIndex) or the
+// list comes back with nothing highlighted.
 func (this *ListWidget) Clear() {
 	this.items = nil
 	this.activeIndex = -1
@@ -378,9 +382,16 @@ func (this *ListWidget) HitTest(x, y float64) (row, col int) {
 	return
 }
 
+// emitSelectionChanged hands the callback the selection as it now stands. The
+// call used to be commented out — it passed oldIdx into a callback that takes a
+// selection set ([]int), which does not compile — so the whole signal was dead
+// and nobody who registered one (ged's generated OnSelectionChanged binding
+// included) ever heard about a selection. Reporting the new row matches what
+// ComboBox emits; oldIdx stays in the signature because the callers use it to
+// decide there is a change worth reporting at all.
 func (this *ListWidget) emitSelectionChanged(oldIdx int) {
 	if this.sigSelectionChanged != nil {
-		//this.sigSelectionChanged(this.Self(), oldIdx)
+		this.sigSelectionChanged(this.Self(), []int{this.activeIndex})
 	}
 }
 
@@ -581,6 +592,16 @@ func (this *ListWidget) OnKeyDown(key int, repeat bool) {
 	case KeyEnter, KeySpace:
 		this.activateCurrent()
 	}
+}
+
+// SetActiveIndex moves the selection to idx from outside the widget, through
+// the same seam the keyboard navigation uses: idx is clamped into range (an
+// empty list stays at "nothing selected"), the selection-changed callback
+// fires only when the row actually moves, and the row is scrolled into view.
+// A host that rebuilds its items with Clear + Append needs this afterwards —
+// Clear resets the selection to -1.
+func (this *ListWidget) SetActiveIndex(idx int) {
+	this.setActiveIndex(idx)
 }
 
 // setActiveIndex 把当前/选中行切到idx(夹在有效范围内), 触发选中变化回调,

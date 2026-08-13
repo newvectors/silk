@@ -353,6 +353,23 @@ func dismissDialog(dlg *gui.Dialog) {
 	}
 }
 
+// fillFinderList replaces list's rows with items and leaves the first one
+// selected. Every finder dialog rebuilds its list on each keystroke, and
+// ListWidget.Clear resets the selection to -1 — with nothing selected the list
+// paints no highlight and its Enter / double-click handler reads ActiveIndex()
+// == -1 and returns, so the dialog looks dead until the user takes the mouse to
+// it. Row 0 is also the row the ranking put on top, which is the one the user
+// means by "the top match".
+func fillFinderList(list *gui.ListWidget, items []gui.ListItem) {
+	list.Clear()
+	for _, it := range items {
+		list.Append(it)
+	}
+	if list.Count() > 0 {
+		list.SetActiveIndex(0)
+	}
+}
+
 // subsequenceMatch reports whether `query`'s runes appear in `text`
 // in order, possibly with other runes between. Both args must
 // already be lower-cased by the caller.
@@ -404,17 +421,16 @@ func showCommandPalette(parent gui.IWidget) {
 	box.AddWidget(list)
 
 	repopulate := func(query string) {
-		list.Clear()
-		for _, c := range filterCommands(paletteCommands, query) {
+		cmds := filterCommands(paletteCommands, query)
+		items := make([]gui.ListItem, 0, len(cmds))
+		for _, c := range cmds {
 			label := c.Name
 			if c.Hint != "" {
 				label = c.Name + "    " + c.Hint
 			}
-			list.Append(gui.ListItem{Text: label, Data: c})
+			items = append(items, gui.ListItem{Text: label, Data: c})
 		}
-		if list.Count() > 0 {
-			list.SetSelectionVisible(true)
-		}
+		fillFinderList(list, items)
 	}
 	repopulate("")
 

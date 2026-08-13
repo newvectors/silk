@@ -51,14 +51,15 @@ func showSymbolFinder(parent gui.IWidget, tabs *gui.TabWidget) {
 				if myGen != gen {
 					return // a newer keystroke superseded this query
 				}
-				list.Clear()
+				items := make([]gui.ListItem, 0, len(syms))
 				for _, s := range syms {
 					label := s.Name
 					if s.ContainerName != "" {
 						label = s.ContainerName + "." + s.Name
 					}
-					list.Append(gui.ListItem{Text: label, Data: s})
+					items = append(items, gui.ListItem{Text: label, Data: s})
 				}
+				fillFinderList(list, items)
 			})
 		}()
 	}
