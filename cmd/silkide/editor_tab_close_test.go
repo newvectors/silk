@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -456,11 +457,19 @@ func TestCloseEditorTabFailedSaveKeepsTheBuffer(t *testing.T) {
 }
 
 // TestCloseEditorTabUnreadableFileKeepsTheBuffer: the file behind a dirty tab
-// can stop being readable while the tab is open — deleted, renamed away, or
-// replaced by a directory. The buffer is then the only copy of that work that
-// exists anywhere, and a failed read used to report it as CLEAN: the tab closed
-// with no prompt, Cmd+Q quit over it, and restoreSession reopening the path
-// from disk made the loss read as a session restore that worked.
+// can stop being readable while the tab is open — deleted, renamed away,
+// replaced by a directory, or left in place with its read permission taken
+// away. The buffer is then the only copy of that work that exists anywhere, and
+// a failed read used to report it as CLEAN: the tab closed with no prompt,
+// Cmd+Q quit over it, and restoreSession reopening the path from disk made the
+// loss read as a session restore that worked.
+//
+// The legs deliberately span both error classes os.ReadFile can hand back. The
+// deleted and directory legs fail with something that is not a permission
+// error; the mode-0000 leg is the only one that does, and it is the case where
+// the file is still sitting right there — so a predicate that carved permission
+// errors back out to "clean" (say, to stop nagging about a merely locked file)
+// would throw away the buffer that was the last copy.
 func TestCloseEditorTabUnreadableFileKeepsTheBuffer(t *testing.T) {
 	const original = "package main\n"
 	const edited = "package main\n\nfunc unsavedWork() {}\n"
@@ -482,6 +491,30 @@ func TestCloseEditorTabUnreadableFileKeepsTheBuffer(t *testing.T) {
 			}
 			if err := os.Mkdir(path, 0o755); err != nil {
 				t.Fatal(err)
+			}
+		}},
+		{"present but unreadable", func(t *testing.T, path string) {
+			// The permission-error leg, and the only one that has to be
+			// guarded: Windows does not deny reads through the mode bits and
+			// root reads straight through them, so it skips there rather than
+			// failing. The two legs above are portable and keep those
+			// platforms covered.
+			if runtime.GOOS == "windows" {
+				t.Skip("Windows does not deny reads through the 0000 mode bit")
+			}
+			if os.Geteuid() == 0 {
+				t.Skip("root reads through the 0000 mode bit, so the file stays readable")
+			}
+			if err := os.Chmod(path, 0o000); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(path, 0o644) }) // else TempDir can't clean up
+			// Pin the error class this leg exists for. A chmod that did not
+			// take leaves a perfectly readable file behind, and the assertions
+			// below would then pass on plain content drift without ever
+			// reaching the read-error branch they are aimed at.
+			if _, err := os.ReadFile(path); !os.IsPermission(err) {
+				t.Fatalf("os.ReadFile(%q) after chmod 0000 = %v; want a permission error, which is the read failure this leg covers", path, err)
 			}
 		}},
 	}
