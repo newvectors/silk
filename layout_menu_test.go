@@ -12,9 +12,12 @@ import (
 // designerCanvas installs a headless canvas as the frame's current document,
 // which is the only way the 布局 menu's handlers can reach one: they all open
 // with requireSelection, and that walks gui.DefaultFrame().CurrentDocView().
+// The frame carries a status bar because setStatus writes there and nowhere
+// else — without one every sentence a handler produces is dropped on the floor.
 func designerCanvas(t *testing.T) *ged.GedView {
 	t.Helper()
 	f := gui.NewFrame()
+	f.SetStatusBar(gui.NewStatusBar())
 	gui.SetDefaultFrame(f)
 	gv := ged.NewGedView()
 	f.SuggestDocDock().AddView(gv)
@@ -101,6 +104,125 @@ func soleContainer(t *testing.T, gv *ged.GedView, factory string) *ged.FakeWidge
 		t.Fatalf("container is a %q, want %q", got, factory)
 	}
 	return box
+}
+
+// runLayoutMenuItem clicks one 布局 menu item and reports both halves of what
+// the user has to go on: the sentence left in the status bar, and how many
+// commands the canvas actually pushed. Clearing the bar first is what keeps a
+// handler that says nothing at all from passing on the previous message.
+func runLayoutMenuItem(t *testing.T, gv *ged.GedView, click func()) (said string, pushed int) {
+	t.Helper()
+	sb := gui.DefaultFrame().StatusBar()
+	if sb == nil {
+		t.Fatal("the frame has no status bar; nothing the handlers say can be read back")
+	}
+	sb.ClearMessage()
+	stack := gv.Scene().UndoStack()
+	before := stack.Current()
+	click()
+	return sb.Message(), stack.Current() - before
+}
+
+// wantDeclined: the canvas refused the selection, so the status bar has to
+// carry the reason. Nothing was pushed, so there is no other trace of the click
+// anywhere — a menu item that reports success here is indistinguishable from
+// one that worked.
+func wantDeclined(t *testing.T, what, said string, pushed int, reason string) {
+	t.Helper()
+	if said != reason {
+		t.Errorf("%s told the user %q, want the decline %q", what, said, reason)
+	}
+	if pushed != 0 {
+		t.Errorf("%s pushed %d command(s) while declining; the canvas and the status bar disagree", what, pushed)
+	}
+}
+
+// wantApplied is the other half: the same handler on a selection it accepts has
+// to say something different, and leave the one step Ctrl+Z undoes.
+func wantApplied(t *testing.T, what, said string, pushed int, report string) {
+	t.Helper()
+	if said != report {
+		t.Errorf("%s told the user %q, want %q", what, said, report)
+	}
+	if pushed != 1 {
+		t.Errorf("%s pushed %d command(s), want the single step Ctrl+Z undoes", what, pushed)
+	}
+}
+
+// TestApplyHBoxLayoutDeclinesALoneWidgetOutLoud drives the case the canvas
+// refuses in silence: GedView.LayOutSelection returns without a word when fewer
+// than two selected items are layout-eligible, and one selected widget is
+// never two. The handler tells the two outcomes apart by watching the undo
+// stack; without that comparison 应用水平布局 reports the layout it did not
+// apply, over a canvas the widgets are still lying loose on.
+func TestApplyHBoxLayoutDeclinesALoneWidgetOutLoud(t *testing.T) {
+	gv := designerCanvas(t)
+	a := placeWidget(t, gv, "gui.Button", "a", 10)
+	b := placeWidget(t, gv, "gui.Label", "b", 30)
+
+	selectWidgets(gv, a)
+	said, pushed := runLayoutMenuItem(t, gv, applyHBoxLayout)
+	wantDeclined(t, "应用水平布局 on a lone widget", said, pushed, "请至少选择2个可布局的控件来应用布局")
+	hasItems(t, "the scene after the declined layout", gv.Scene().Children(), a, b)
+
+	// The accepted click has to read differently, or the status bar says the
+	// same thing whether the command ran or not.
+	selectWidgets(gv, a, b)
+	said, pushed = runLayoutMenuItem(t, gv, applyHBoxLayout)
+	wantApplied(t, "应用水平布局 on two widgets", said, pushed, "已应用水平布局 (HBox)")
+	hasItems(t, "the HBox", soleContainer(t, gv, "gui.HBox").Children(), a, b)
+}
+
+// TestApplyVBoxLayoutDeclinesALockedSelectionOutLoud is the second way a
+// selection declines, and the one the count in the menu's own enablement rule
+// cannot catch: position-locked widgets drop out of the lay-out, so two locked
+// widgets are as empty a selection as one widget is. 应用垂直布局 stays enabled
+// and has to say why it did nothing.
+func TestApplyVBoxLayoutDeclinesALockedSelectionOutLoud(t *testing.T) {
+	gv := designerCanvas(t)
+	a := placeWidget(t, gv, "gui.Button", "a", 10)
+	b := placeWidget(t, gv, "gui.Label", "b", 30)
+	a.SetLockPos(true)
+	b.SetLockPos(true)
+	selectWidgets(gv, a, b)
+
+	said, pushed := runLayoutMenuItem(t, gv, applyVBoxLayout)
+	wantDeclined(t, "应用垂直布局 on a position-locked selection", said, pushed, "请至少选择2个可布局的控件来应用布局")
+	hasItems(t, "the scene after the declined layout", gv.Scene().Children(), a, b)
+
+	a.SetLockPos(false)
+	b.SetLockPos(false)
+	said, pushed = runLayoutMenuItem(t, gv, applyVBoxLayout)
+	wantApplied(t, "应用垂直布局 once the widgets are unlocked", said, pushed, "已应用垂直布局 (VBox)")
+	hasItems(t, "the VBox", soleContainer(t, gv, "gui.VBox").Children(), a, b)
+}
+
+// TestBreakLayoutDeclinesAPlainWidgetOutLoud: 打破布局 has nothing to lift out
+// of a widget that holds no children, so the canvas builds an empty command and
+// drops it. Reporting 布局已打破 there names a container the user never had.
+func TestBreakLayoutDeclinesAPlainWidgetOutLoud(t *testing.T) {
+	gv := designerCanvas(t)
+	plain := placeWidget(t, gv, "gui.Button", "plain", 10)
+	selectWidgets(gv, plain)
+
+	said, pushed := runLayoutMenuItem(t, gv, breakLayout)
+	wantDeclined(t, "打破布局 on a plain button", said, pushed, "选中的控件不是布局容器")
+	hasItems(t, "the scene after the declined break", gv.Scene().Children(), plain)
+
+	box := placeWidget(t, gv, "gui.VBox", "box", 30)
+	box.SetBounds(10, 30, 40, 20)
+	kid, err := ged.NewFakeWidgetFromFactory("gui.Label")
+	if err != nil {
+		t.Fatalf("create gui.Label: %v", err)
+	}
+	kid.SetWidgetName("kid")
+	kid.SetBounds(12, 34, 30, 6)
+	kid.SetParent(box)
+
+	selectWidgets(gv, box)
+	said, pushed = runLayoutMenuItem(t, gv, breakLayout)
+	wantApplied(t, "打破布局 on a layout container", said, pushed, "布局已打破")
+	hasItems(t, "the scene after the break", gv.Scene().Children(), plain, kid)
 }
 
 // TestApplyVBoxLayoutWrapsSelectionUndoably is the menu half of the fix: 应用垂直
