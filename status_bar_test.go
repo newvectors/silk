@@ -128,6 +128,39 @@ func TestStatusBarWidgetCountReachesEveryDepth(t *testing.T) {
 	}
 }
 
+// TestStatusBarWidgetCountReachesEverySibling is the breadth half of the same
+// guard. Every fixture above is a single chain, so they pin how deep the walk
+// goes and never that it comes back up: a walk that descends into the first
+// container it meets and returns from the loop with that branch's total gets
+// all of them right. Here a header row sits beside a body column — the most
+// ordinary form layout there is — and such a walk reports 3 while nine widgets
+// sit on the canvas. Both levels branch, so a walk that gets the two roots
+// right and still stops at the first nested container is caught as well.
+func TestStatusBarWidgetCountReachesEverySibling(t *testing.T) {
+	newStatusBarLabels()
+	gv := ged.NewGedView()
+	bindStatusBarTo(gv)
+
+	header := dropWidgetInto(t, gv, gv.Scene(), "gui.HBox")
+	dropWidgetInto(t, gv, header, "gui.Label")
+	dropWidgetInto(t, gv, header, "gui.Button")
+	if got := statusWidgetCountLabel.Text(); got != "3 widgets" {
+		t.Fatalf("the header row alone reads %q, want %q", got, "3 widgets")
+	}
+
+	body := dropWidgetInto(t, gv, gv.Scene(), "gui.VBox")
+	card := dropWidgetInto(t, gv, body, "gui.Card")
+	dropWidgetInto(t, gv, card, "gui.Edit")
+	dropWidgetInto(t, gv, card, "gui.Edit")
+	group := dropWidgetInto(t, gv, body, "gui.GroupBox")
+	dropWidgetInto(t, gv, group, "gui.CheckBox")
+
+	// HBox(Label, Button) beside VBox(Card(Edit, Edit), GroupBox(CheckBox)).
+	if got := statusWidgetCountLabel.Text(); got != "9 widgets" {
+		t.Errorf("a header row beside a body column reads %q, want %q", got, "9 widgets")
+	}
+}
+
 // TestStatusBarWidgetCountWithoutWidgets pins the two zero cases the recursive
 // walk must keep: an empty scene counts nothing (not the scene item itself),
 // and a view-less status bar still resets to zero rather than reaching through
