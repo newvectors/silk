@@ -1,6 +1,9 @@
 package gui
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // toolBarLabels are one glyph each on purpose: the text-only button formula is
 // text width + margins, so short labels put several buttons inside the narrow
@@ -42,6 +45,31 @@ func overflowToolBarTexts(tb *ToolBar) []string {
 	return out
 }
 
+// toolBarChevronShowing reports whether the chevron is on the bar. It reads the
+// field instead of calling overflowButton(), which builds the button on demand:
+// on a bar that never overflowed there is nothing to build, and a freshly built
+// button answers "visible" to a question about a chevron the user never saw.
+func toolBarChevronShowing(tb *ToolBar) bool {
+	return tb.overflowBtn != nil && tb.overflowBtn.IsVisible()
+}
+
+// toolBarFitWidth returns the narrowest whole-pixel width that holds the whole
+// run: the right edge the layout gave the last item, plus the bar's own right
+// margin, rounded up. It is measured from a placement rather than recomputed
+// from the button formula because the run is as wide as the font makes it, and
+// a hard-coded number would quietly become a slack fixture on the next OS.
+func toolBarFitWidth(t *testing.T, tb *ToolBar) float64 {
+	t.Helper()
+	tb.SetBounds(0, 0, 4000, 32)
+	tb.Layout()
+	if got := overflowToolBarTexts(tb); len(got) != 0 {
+		t.Fatalf("a 4000 px bar overflowed %v; the run cannot be measured", got)
+	}
+	items := tb.Items()
+	x, _, w, _ := items[len(items)-1].Bounds()
+	return math.Ceil(x + w + Theme().ButtonMargin.R)
+}
+
 func sameTexts(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -78,6 +106,74 @@ func TestToolBarWideLayoutPlacesEveryItem(t *testing.T) {
 				i, item.(*Button).Text(), x, prev)
 		}
 		prev = x
+	}
+}
+
+// TestToolBarFitWidthPlacesEveryItem stands where the 1000 px fixture cannot:
+// on a bar exactly as wide as the run instead of one with some 700 px to spare.
+// Only here does the pre-check earn its place — delete the run total and the
+// `total > avail` test in front of the fit loop, a tidy-up that reads as
+// harmless because the loop appears to measure the same thing, and the loop's
+// `- ovW - spacing` reservation comes out of a budget with nothing to give, so
+// a toolbar that fits loses its tail to a chevron nobody needed.
+func TestToolBarFitWidthPlacesEveryItem(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	fitW := toolBarFitWidth(t, tb)
+
+	// Overflow first: with the chevron already on the bar, "no chevron" below
+	// means it was taken away at this width, not that it was never built.
+	tb.SetBounds(0, 0, 120, 32)
+	tb.Layout()
+	if !toolBarChevronShowing(tb) {
+		t.Fatalf("120 px bar shows no chevron (visible %v); there is nothing for the fit width to take away",
+			visibleToolBarTexts(tb))
+	}
+
+	tb.SetBounds(0, 0, fitW, 32)
+	tb.Layout()
+
+	if got := visibleToolBarTexts(tb); !sameTexts(got, toolBarLabels) {
+		t.Errorf("at %v px, the width of the run itself, visible items = %v, want all of %v",
+			fitW, got, toolBarLabels)
+	}
+	if got := overflowToolBarTexts(tb); len(got) != 0 {
+		t.Errorf("at %v px, the width of the run itself, overflow = %v, want nothing held back",
+			fitW, got)
+	}
+	if toolBarChevronShowing(tb) {
+		t.Errorf("at %v px the chevron is still shown; it is taking space on a bar the whole run fits in", fitW)
+	}
+}
+
+// TestToolBarOnePixelUnderTheFitWidthCutsTheRun is the far side of that
+// boundary, and it is what keeps the test above from being a slack fixture: were
+// the fit width even a pixel generous, this bar would place everything too and
+// neither test would be standing on the boundary. A pixel short, the budget must
+// fail — and failing it costs far more than the pixel, because the chevron and
+// its spacing come off the end, so the tail moves into the menu.
+func TestToolBarOnePixelUnderTheFitWidthCutsTheRun(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	narrow := toolBarFitWidth(t, tb) - 1
+
+	tb.SetBounds(0, 0, narrow, 32)
+	tb.Layout()
+
+	vis := visibleToolBarTexts(tb)
+	if sameTexts(vis, toolBarLabels) {
+		t.Fatalf("at %v px, one pixel short of the run, every item was still placed (%v); the run does not fit this budget",
+			narrow, vis)
+	}
+	if !sameTexts(vis, toolBarLabels[:len(vis)]) {
+		t.Fatalf("at %v px visible items = %v, want the leading items of %v in order",
+			narrow, vis, toolBarLabels)
+	}
+	if got, want := overflowToolBarTexts(tb), toolBarLabels[len(vis):]; !sameTexts(got, want) {
+		t.Errorf("at %v px overflow = %v, want exactly the items that were not placed, %v",
+			narrow, got, want)
+	}
+	if !toolBarChevronShowing(tb) {
+		t.Errorf("at %v px the bar held back %v but shows no chevron; those actions cannot be reached",
+			narrow, overflowToolBarTexts(tb))
 	}
 }
 
