@@ -2162,6 +2162,20 @@ func updateStatusBarInfo() {
 	updateStatusBarInfoFor(currentGedView())
 }
 
+// countSceneWidgets counts every widget in the tree, not just the scene's own
+// children. A widget nested in a container is as much part of the design as a
+// top-level one — codegen declares a field for it wherever it sits, which is
+// why sceneWidgetNames walks the whole tree too — and counting only the roots
+// made the number drop as the user tidied widgets into containers.
+func countSceneWidgets(items []graph.IItem) int {
+	n := 0
+	for _, it := range items {
+		n++
+		n += countSceneWidgets(it.Children())
+	}
+	return n
+}
+
 // updateStatusBarInfoFor refreshes the indicators from gv. Split out so the
 // per-view signal hooks in bindStatusBarTo can name the view that changed
 // rather than going back through the frame's active-view lookup.
@@ -2179,7 +2193,7 @@ func updateStatusBarInfoFor(gv *ged.GedView) {
 	if statusWidgetCountLabel != nil {
 		count := 0
 		if gv != nil && gv.Scene() != nil {
-			count = len(gv.Scene().Children())
+			count = countSceneWidgets(gv.Scene().Children())
 		}
 		statusWidgetCountLabel.SetText(fmt.Sprintf("%d widgets", count))
 	}

@@ -61,6 +61,121 @@ func TestStatusBarWidgetCountFollowsDrops(t *testing.T) {
 	}
 }
 
+// dropWidgetInto is dropWidget's other half: GedView.OnDrop hit-tests for a
+// container under the cursor and hands that container to the AddCommand instead
+// of the scene root, so a widget dropped on a VBox lands inside it. Same
+// command, same PushCommand — drop, paste and their undo/redo all share it.
+func dropWidgetInto(t *testing.T, gv *ged.GedView, parent graph.IItem, factory string) *ged.FakeWidget {
+	t.Helper()
+	item, err := ged.NewFakeWidgetFromFactory(factory)
+	if err != nil {
+		t.Fatalf("create %s: %v", factory, err)
+	}
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(item, parent)
+	gv.Scene().PushCommand(cmd)
+	return item
+}
+
+// TestStatusBarWidgetCountIncludesNestedWidgets guards the count against the
+// user's own tidying: the cell counted the scene's direct children, so dragging
+// three buttons into a VBox — what 布局 and drag-to-nest exist to encourage —
+// took the design from "4 widgets" down to "1 widgets" while nothing was
+// removed. Undo/redo ride the same AddCommand, one button at a time.
+func TestStatusBarWidgetCountIncludesNestedWidgets(t *testing.T) {
+	newStatusBarLabels()
+	gv := ged.NewGedView()
+	bindStatusBarTo(gv)
+
+	vbox := dropWidgetInto(t, gv, gv.Scene(), "gui.VBox")
+	if got := statusWidgetCountLabel.Text(); got != "1 widgets" {
+		t.Fatalf("after the container drop the count cell reads %q, want %q", got, "1 widgets")
+	}
+
+	for i := 0; i < 3; i++ {
+		dropWidgetInto(t, gv, vbox, "gui.Button")
+	}
+	if got := statusWidgetCountLabel.Text(); got != "4 widgets" {
+		t.Errorf("with three buttons inside the VBox the count cell reads %q, want %q", got, "4 widgets")
+	}
+
+	gv.Scene().UndoStack().Undo()
+	if got := statusWidgetCountLabel.Text(); got != "3 widgets" {
+		t.Errorf("after undoing the third button the count cell reads %q, want %q", got, "3 widgets")
+	}
+
+	gv.Scene().UndoStack().Redo()
+	if got := statusWidgetCountLabel.Text(); got != "4 widgets" {
+		t.Errorf("after redoing the third button the count cell reads %q, want %q", got, "4 widgets")
+	}
+}
+
+// TestStatusBarWidgetCountReachesEveryDepth is the same guard one level deeper.
+// A container inside a container is ordinary — a Card of fields inside the
+// form's VBox — and a count that descends only into the scene's own children
+// reports 2 here while three widgets sit on the canvas.
+func TestStatusBarWidgetCountReachesEveryDepth(t *testing.T) {
+	newStatusBarLabels()
+	gv := ged.NewGedView()
+	bindStatusBarTo(gv)
+
+	vbox := dropWidgetInto(t, gv, gv.Scene(), "gui.VBox")
+	card := dropWidgetInto(t, gv, vbox, "gui.Card")
+	dropWidgetInto(t, gv, card, "gui.Button")
+
+	if got := statusWidgetCountLabel.Text(); got != "3 widgets" {
+		t.Errorf("VBox → Card → Button reads %q, want %q", got, "3 widgets")
+	}
+}
+
+// TestStatusBarWidgetCountWithoutWidgets pins the two zero cases the recursive
+// walk must keep: an empty scene counts nothing (not the scene item itself),
+// and a view-less status bar still resets to zero rather than reaching through
+// a nil canvas for its children.
+func TestStatusBarWidgetCountWithoutWidgets(t *testing.T) {
+	newStatusBarLabels()
+	gv := ged.NewGedView()
+	bindStatusBarTo(gv)
+
+	updateStatusBarInfoFor(gv)
+	if got := statusWidgetCountLabel.Text(); got != "0 widgets" {
+		t.Errorf("empty scene: count cell = %q, want %q", got, "0 widgets")
+	}
+
+	dropWidgetInto(t, gv, gv.Scene(), "gui.Button")
+	updateStatusBarInfoFor(nil)
+	if got := statusWidgetCountLabel.Text(); got != "0 widgets" {
+		t.Errorf("no canvas: count cell = %q, want %q", got, "0 widgets")
+	}
+}
+
+// TestStatusBarCellsBesideTheCount keeps the other three cells honest while the
+// count learns to recurse: they are written by the same function, and a nested
+// widget is exactly the case where the selection cell has to report the item's
+// own position rather than the container's.
+func TestStatusBarCellsBesideTheCount(t *testing.T) {
+	newStatusBarLabels()
+	gv := ged.NewGedView()
+	bindStatusBarTo(gv)
+
+	vbox := dropWidgetInto(t, gv, gv.Scene(), "gui.VBox")
+	btn := dropWidgetInto(t, gv, vbox, "gui.Button")
+	btn.SetPos(40, 25)
+
+	gv.Selection().Add(btn)
+	updateStatusBarInfoFor(gv)
+
+	if got := statusInfoLabel.Text(); got != "Button (40,25)" {
+		t.Errorf("selection cell = %q, want %q", got, "Button (40,25)")
+	}
+	if got := statusZoomLabel.Text(); got != "100%" {
+		t.Errorf("zoom cell = %q, want %q", got, "100%")
+	}
+	if got := statusWidgetCountLabel.Text(); got != "2 widgets" {
+		t.Errorf("count cell = %q, want %q", got, "2 widgets")
+	}
+}
+
 // TestStatusBarZoomFollowsTheView covers the other stale cell: the zoom
 // percentage was written only where updateStatusBarInfo happened to be called,
 // so Ctrl+wheel or a fit-to-view moved the canvas and left "100%" behind.
