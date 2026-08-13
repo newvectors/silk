@@ -140,17 +140,20 @@ func TestGenerateCodeIndexedReportsUnmappedFactory(t *testing.T) {
 	scene.SetFormTitle("Unmapped")
 	scene.SetSize(100, 70)
 	addFakeTo(t, scene, "gui.Button", "btnOK")
-	addFakeTo(t, scene, "gui.Separator", "sep1")
+	// gui.Menu is the stand-in for "registered widget, no factoryMap row": it
+	// needs container plumbing to be placeable, not a table row, so it stays
+	// unmapped. Any factory mapped later would silently gut this test.
+	addFakeTo(t, scene, "gui.Menu", "menu1")
 
 	gen := scene.GenerateCodeIndexed(CodeGenOptions{PackageName: "main", TypeName: "UnmappedUI"})
 	if gen.Err == nil {
 		t.Fatalf("no error for an unmapped factory\n----\n%s", gen.Code)
 	}
 	msg := gen.Err.Error()
-	if !strings.Contains(msg, "sep1") {
+	if !strings.Contains(msg, "menu1") {
 		t.Errorf("error does not name the widget: %q", msg)
 	}
-	if !strings.Contains(msg, "gui.Separator") {
+	if !strings.Contains(msg, "gui.Menu") {
 		t.Errorf("error does not name the factory: %q", msg)
 	}
 	if strings.Contains(msg, "btnOK") {
@@ -159,7 +162,7 @@ func TestGenerateCodeIndexedReportsUnmappedFactory(t *testing.T) {
 
 	// The degraded code is still produced, unchanged: GenerateCode's contract
 	// does not move, only the extra diagnosis alongside it is new.
-	if !strings.Contains(gen.Code, `core.New("gui.Separator")`) {
+	if !strings.Contains(gen.Code, `core.New("gui.Menu")`) {
 		t.Errorf("degraded output missing, GenerateCode behaviour changed\n----\n%s", gen.Code)
 	}
 }

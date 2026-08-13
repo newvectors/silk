@@ -89,6 +89,7 @@ var factoryMap = map[string]widgetMapping{
 	"gui.VBox":              {goType: "*gui.VBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewVBox()`},
 	"gui.HBox":              {goType: "*gui.HBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewHBox()`},
 	"gui.Table":             {goType: "*gui.Table", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTable()`},
+	"prop.PropertySheet":    {goType: "*prop.PropertySheet", importPath: "github.com/uk0/silk/prop", constructor: `prop.NewPropertySheet()`},
 	"gui.ScrollArea":        {goType: "*gui.ScrollArea", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewScrollArea()`},
 	"gui.Form":              {goType: "*gui.Form", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewForm()`},
 	"gui.SpinBox":           {goType: "*gui.SpinBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSpinBox()`},
@@ -101,6 +102,7 @@ var factoryMap = map[string]widgetMapping{
 	"gui.ToolBar":           {goType: "*gui.ToolBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewToolBar()`},
 	"gui.StatusBar":         {goType: "*gui.StatusBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewStatusBar()`},
 	"gui.Dialog":            {goType: "*gui.Dialog", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDialog("", nil)`},
+	"gui.ButtonBox":         {goType: "*gui.ButtonBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewButtonBox()`},
 	"gui.LineChart":         {goType: "*gui.LineChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLineChart()`},
 	"gui.BarChart":          {goType: "*gui.BarChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewBarChart()`},
 	"gui.PieChart":          {goType: "*gui.PieChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPieChart()`},
@@ -131,7 +133,9 @@ var factoryMap = map[string]widgetMapping{
 	"gui.SwitchGroup":       {goType: "*gui.SwitchGroup", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSwitchGroup()`},
 	"gui.Link":              {goType: "*gui.Link", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLink("", "")`},
 	"gui.LabelSeparator":    {goType: "*gui.LabelSeparator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLabelSeparator("")`},
+	"gui.Separator":         {goType: "*gui.Separator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSeparator()`},
 	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPlaceholder("")`},
+	"gui.Space":             {goType: "*gui.Space", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSpace(false, false)`},
 	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTimeline()`},
 	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNotificationPanel()`},
 	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCodeEditor()`},
@@ -1111,6 +1115,11 @@ var industrialDesignProps = map[string][]designProp{
 	"gui.ProgressBar": {{"Value", "SetValue", dpFloat}},
 	"gui.SpinBox":     {{"Min", "SetMin", dpInt}, {"Max", "SetMax", dpInt}, {"Value", "SetValue", dpInt}},
 	"gui.CheckBox":    {{"IsChecked", "SetChecked", dpBool}},
+	// Widgets whose entire designed content is a property: a Space is its axis
+	// and stretch, a ButtonBox is its button list. Without these rows a dropped
+	// one generates as the bare constructor and loses what was designed on it.
+	"gui.Space":     {{"IsVertical", "SetVertical", dpBool}, {"IsExpand", "SetExpand", dpBool}},
+	"gui.ButtonBox": {{"ButtonsSpec", "SetButtonsSpec", dpString}},
 }
 
 // emitDesignProperties emits setter calls for the design-time properties an

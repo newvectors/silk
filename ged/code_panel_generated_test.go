@@ -173,14 +173,16 @@ func TestCodePanelShowsGenerationError(t *testing.T) {
 	scene := view.GedScene()
 	scene.SetFormTitle("Broken")
 	addFakeTo(t, scene, "gui.Button", "btnOK")
-	addFakeTo(t, scene, "gui.Separator", "sepBad")
+	// See TestGenerateCodeIndexedReportsUnmappedFactory: gui.Menu is the
+	// registered-but-unmapped fixture, so the panel has something to refuse.
+	addFakeTo(t, scene, "gui.Menu", "menuBad")
 
 	panel := NewCodePanel()
 	panel.BindGedView(view)
 	panel.ShowTab(codeTabGen)
 
 	got := panel.genView.Text()
-	if !strings.Contains(got, "sepBad") {
+	if !strings.Contains(got, "menuBad") {
 		t.Errorf("view does not name the offending widget\n----\n%s", got)
 	}
 	if strings.Contains(got, "func NewBrokenUI()") {

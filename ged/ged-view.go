@@ -520,6 +520,14 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 		return 50, 35
 	case "notificationpanel":
 		return 50, 40
+	case "separator":
+		return 50, 2
+	case "space":
+		return 20, 6
+	case "buttonbox":
+		return 50, 8
+	case "propertysheet":
+		return 60, 50
 	default:
 		return 30, 8
 	}

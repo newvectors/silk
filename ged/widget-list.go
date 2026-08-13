@@ -59,11 +59,11 @@ var categoryDefs = []widgetCategoryDef{
 	},
 	{
 		name:  "容器/布局 (Layout)",
-		names: []string{"gui.VBox", "gui.HBox", "gui.GridLayout", "gui.FormLayout", "gui.FlexWrap", "gui.Splitter", "gui.StackedWidget", "gui.TabWidget", "gui.Card", "gui.Accordion"},
+		names: []string{"gui.VBox", "gui.HBox", "gui.GridLayout", "gui.FormLayout", "gui.FlexWrap", "gui.Splitter", "gui.StackedWidget", "gui.TabWidget", "gui.Card", "gui.Accordion", "gui.Separator", "gui.Space"},
 	},
 	{
 		name:  "数据视图 (Data)",
-		names: []string{"gui.ListWidget", "gui.VirtualList", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination", "gui.DiffView"},
+		names: []string{"gui.ListWidget", "gui.VirtualList", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination", "gui.DiffView", "prop.PropertySheet"},
 	},
 	{
 		name:  "图表 (Charts)",
@@ -75,7 +75,7 @@ var categoryDefs = []widgetCategoryDef{
 	},
 	{
 		name:  "对话框/窗口 (Window)",
-		names: []string{"gui.Form", "gui.Dialog", "gui.ToolBar", "gui.StatusBar", "gui.CodeEditor"},
+		names: []string{"gui.Form", "gui.Dialog", "gui.ToolBar", "gui.StatusBar", "gui.CodeEditor", "gui.ButtonBox"},
 	},
 }
 

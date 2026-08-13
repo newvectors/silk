@@ -91,3 +91,31 @@ func (this *Space) SetMinSize(min float64) {
 func (this *Space) MinSize() float64 {
 	return this.min
 }
+
+func (this *Space) IsVertical() bool {
+	return this.vertical
+}
+
+// SetVertical switches the axis the space occupies. Both flags feed SizeHints,
+// which the parent layout has already read, so the parent is re-laid out — a
+// spring flipped in the designer that keeps its old orientation on screen looks
+// like the setter did nothing.
+func (this *Space) SetVertical(b bool) {
+	this.vertical = b
+	this.InvalidateParentLayout()
+}
+
+func (this *Space) IsExpand() bool {
+	return this.expand
+}
+
+func (this *Space) SetExpand(b bool) {
+	this.expand = b
+	this.InvalidateParentLayout()
+}
+
+func (this *Space) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("垂直", this.IsVertical, this.SetVertical)
+	list.AddProperty("弹性", this.IsExpand, this.SetExpand)
+	list.AddProperty("最小尺寸", this.MinSize, this.SetMinSize)
+}

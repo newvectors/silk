@@ -200,6 +200,10 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 		// Empty by default — container for child widgets
 	case "dialog":
 		// Empty by default — container/window widget
+	case "buttonbox":
+		if b, ok := w.(*gui.ButtonBox); ok {
+			b.SetButtonsSpec("@ok,@cancel")
+		}
 	}
 }
 

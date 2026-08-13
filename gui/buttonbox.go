@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"strings"
 )
 
 func init() {
@@ -26,6 +27,7 @@ type ButtonBox struct {
 	Menu
 	cbSubmit func(string)
 	btnMap   map[string]*Button
+	spec     string
 }
 
 func NewButtonBox() *ButtonBox {
@@ -61,6 +63,32 @@ func (this *ButtonBox) SetButtons(btns []string) {
 		p.Action().BindFunc(this.onBtnClick)
 		this.btnMap[name] = p
 	}
+}
+
+func (this *ButtonBox) ButtonsSpec() string {
+	return this.spec
+}
+
+// SetButtonsSpec is SetButtons as one editable string: the button names
+// separated by commas ("@ok,@cancel"), which is the form a designer types into
+// a property sheet and the form a design file stores. Names are trimmed and
+// blanks dropped, and the normalized spelling is what ButtonsSpec reports back,
+// so " @ok , " and "@ok" are the same box.
+func (this *ButtonBox) SetButtonsSpec(s string) {
+	var btns []string
+	for _, name := range strings.Split(s, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		btns = append(btns, name)
+	}
+	this.spec = strings.Join(btns, ",")
+	this.SetButtons(btns)
+}
+
+func (this *ButtonBox) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("按钮", this.ButtonsSpec, this.SetButtonsSpec)
 }
 
 func (this *ButtonBox) onBtnClick(action IAction, iw interface{}) {
