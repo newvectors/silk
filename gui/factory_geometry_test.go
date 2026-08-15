@@ -409,9 +409,15 @@ func TestFactorySpinnerDrawsAndCanBeArmed(t *testing.T) {
 	if sp.anim != nil {
 		t.Fatalf("Init armed a repaint heartbeat; every reflect-built widget would carry one")
 	}
+
+	// Attached first: an unparented spinner cannot be on screen, and arming
+	// one is the leak that pinned the loop at 40-63 repaints/s (see
+	// spinner_idle_test.go). SetBusy alone is not enough, and must not be.
+	host := NewVBox()
+	sp.SetParent(host)
 	sp.SetBusy(true)
 	if sp.anim == nil || sp.anim.State() != AnimRunning {
-		t.Errorf("SetBusy(true) on a factory spinner left the heartbeat unarmed — it never repaints")
+		t.Errorf("SetBusy(true) on an attached, visible factory spinner left the heartbeat unarmed — it never repaints")
 	}
 }
 
