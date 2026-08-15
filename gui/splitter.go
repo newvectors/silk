@@ -31,12 +31,23 @@ func NewSplitter(vertical bool) *Splitter {
 	p := new(Splitter)
 	p.Init(p)
 	p.vertical = vertical
-	p.handleSize = 5
-	p.dragging = -1
-	p.hoverHandle = -1
-	p.lastClickHandle = -1
-	p.collapsedSizes = make(map[int]float64)
 	return p
+}
+
+// Init carries the defaults the factory path depends on. A reflect-built
+// splitter (designer palette, form loader) only ever gets Init, and dragging
+// left at 0 makes the first bare mouse move take the drag branch: it indexes
+// sizes[0]/sizes[1] on a splitter that may have neither pane, and silently
+// resizes one that does. handleSize belongs here too -- a 0 handle is a
+// zero-width grab target no mouse position can hit.
+func (this *Splitter) Init(iw IWidget) {
+	this.Widget.Init(iw)
+
+	this.handleSize = 5
+	this.dragging = -1
+	this.hoverHandle = -1
+	this.lastClickHandle = -1
+	this.collapsedSizes = make(map[int]float64)
 }
 
 func (this *Splitter) Vertical() bool {

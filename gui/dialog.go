@@ -39,15 +39,25 @@ func NewDialog(title string, parent IWidget) *Dialog {
 	p := new(Dialog)
 	p.Init(p)
 	p.SetTitle(title)
-	p.resultMap = make(map[string]DialogResult)
-	p.cancelResult = DialogCancel
 	if parent != nil {
 		p.SetParent(parent)
 	}
-	p.btnBox = NewButtonBox()
-	p.btnBox.SetParent(p)
-	p.btnBox.SigSubmit(p.onBtnClick)
 	return p
+}
+
+// Init carries the state every dialog needs regardless of how it was built. A
+// reflect-built dialog (designer palette, form loader) only ever gets Init, and
+// without this AddButton dies on a nil resultMap and a nil button bar, while
+// cancelResult left at 0 makes Esc return DialogOK instead of rejecting.
+func (this *Dialog) Init(iw IWidget) {
+	this.Form.Init(iw)
+
+	this.resultMap = make(map[string]DialogResult)
+	this.cancelResult = DialogCancel
+
+	this.btnBox = NewButtonBox()
+	this.btnBox.SetParent(iw)
+	this.btnBox.SigSubmit(this.onBtnClick)
 }
 
 // SetContent sets the main content widget displayed in the dialog body.
