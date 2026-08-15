@@ -237,9 +237,15 @@ type Indicator struct {
 func NewIndicator() *Indicator {
 	p := new(Indicator)
 	p.Init(p)
-	p.color = paint.Color{R: 76, G: 175, B: 80, A: 255}    // green
-	p.offColor = paint.Color{R: 90, G: 96, B: 100, A: 255} // gray
 	return p
+}
+
+// Init carries the lit / unlit colours (see the file note on factory
+// construction).
+func (this *Indicator) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = paint.Color{R: 76, G: 175, B: 80, A: 255}    // green
+	this.offColor = paint.Color{R: 90, G: 96, B: 100, A: 255} // gray
 }
 
 // SetOn turns the lamp on or off.
@@ -384,13 +390,19 @@ type DigitalDisplay struct {
 func NewDigitalDisplay() *DigitalDisplay {
 	p := new(DigitalDisplay)
 	p.Init(p)
-	p.format = "%.1f"
-	p.onColor = paint.Color{R: 0, G: 230, B: 118, A: 255} // green
-	p.offColor = paint.Color{R: 30, G: 50, B: 40, A: 255}
-	p.bgColor = paint.Color{R: 15, G: 20, B: 18, A: 255}
-	p.loColor = paint.Color{R: 41, G: 182, B: 246, A: 255} // blue
-	p.hiColor = paint.Color{R: 239, G: 83, B: 80, A: 255}  // red
 	return p
+}
+
+// Init carries the format verb and the segment colours (see the file note on
+// factory construction).
+func (this *DigitalDisplay) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.format = "%.1f"
+	this.onColor = paint.Color{R: 0, G: 230, B: 118, A: 255} // green
+	this.offColor = paint.Color{R: 30, G: 50, B: 40, A: 255}
+	this.bgColor = paint.Color{R: 15, G: 20, B: 18, A: 255}
+	this.loColor = paint.Color{R: 41, G: 182, B: 246, A: 255} // blue
+	this.hiColor = paint.Color{R: 239, G: 83, B: 80, A: 255}  // red
 }
 
 // SetValue sets the displayed value.
@@ -597,9 +609,15 @@ type Valve struct {
 func NewValve() *Valve {
 	p := new(Valve)
 	p.Init(p)
-	p.openColor = paint.Color{R: 76, G: 175, B: 80, A: 255}     // green
-	p.closedColor = paint.Color{R: 158, G: 158, B: 158, A: 255} // gray
 	return p
+}
+
+// Init carries the open / closed colours (see the file note on factory
+// construction).
+func (this *Valve) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.openColor = paint.Color{R: 76, G: 175, B: 80, A: 255}     // green
+	this.closedColor = paint.Color{R: 158, G: 158, B: 158, A: 255} // gray
 }
 
 // SetState sets the valve open (true) or closed (false).
@@ -715,9 +733,15 @@ type Pipe struct {
 func NewPipe() *Pipe {
 	p := new(Pipe)
 	p.Init(p)
-	p.flowColor = paint.Color{R: 33, G: 150, B: 243, A: 255} // blue
-	p.idleColor = paint.Color{R: 176, G: 190, B: 197, A: 255}
 	return p
+}
+
+// Init carries the flow / idle colours (see the file note on factory
+// construction).
+func (this *Pipe) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.flowColor = paint.Color{R: 33, G: 150, B: 243, A: 255} // blue
+	this.idleColor = paint.Color{R: 176, G: 190, B: 197, A: 255}
 }
 
 // SetActive toggles flow on the pipe.
