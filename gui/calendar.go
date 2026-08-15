@@ -59,10 +59,15 @@ func NewCalendar() *Calendar {
 
 // Init carries the hover sentinels, not NewCalendar: the designer and the
 // .tdoc loader build widgets through the core factory, which reflects on Init
-// and never sees the constructor. At hoverRow/hoverCol 0 the top-left day cell
-// draws the hover wash before the mouse has ever entered the grid.
-func (this *Calendar) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// and never sees the constructor, and a zero hoverRow/hoverCol paints the
+// top-left day cell hovered before the mouse has ever entered the widget.
+//
+// The displayed month is deliberately left at its zero value here rather than
+// stamped from time.Now(): DisplayedMonth resolves a zero month to the current
+// one, which keeps Init free of the clock while a factory-built calendar still
+// opens on today's month.
+func (this *Calendar) Init(self IWidget) {
+	this.Widget.Init(self)
 	this.hoverRow = -1
 	this.hoverCol = -1
 }
@@ -88,7 +93,7 @@ func (this *Calendar) SetSelectedDate(d time.Time) {
 // selection.
 func (this *Calendar) ShowMonth(year int, month time.Month) {
 	m := time.Date(year, month, 1, 0, 0, 0, 0, time.Local)
-	if m.Equal(this.month) {
+	if m.Equal(this.DisplayedMonth()) {
 		return
 	}
 	this.month = m
@@ -98,14 +103,14 @@ func (this *Calendar) ShowMonth(year int, month time.Month) {
 // NextMonth advances the displayed month by one, rolling Dec→Jan and
 // bumping the year.
 func (this *Calendar) NextMonth() {
-	this.month = this.month.AddDate(0, 1, 0)
+	this.month = this.DisplayedMonth().AddDate(0, 1, 0)
 	this.Self().Update()
 }
 
 // PrevMonth steps the displayed month back by one, rolling Jan→Dec and
 // dropping the year.
 func (this *Calendar) PrevMonth() {
-	this.month = this.month.AddDate(0, -1, 0)
+	this.month = this.DisplayedMonth().AddDate(0, -1, 0)
 	this.Self().Update()
 }
 
@@ -115,8 +120,16 @@ func (this *Calendar) SigDateSelected(fn func(time.Time)) {
 	this.cbDateSelected = fn
 }
 
-// DisplayedMonth returns the first day of the month the grid is showing.
-func (this *Calendar) DisplayedMonth() time.Time { return this.month }
+// DisplayedMonth returns the first day of the month the grid is showing. A
+// zero month — where a factory-built Calendar starts, since Init stays clock-
+// free — resolves to the current month, so the header, the grid and the hit
+// test all read "now" instead of January of year 1.
+func (this *Calendar) DisplayedMonth() time.Time {
+	if this.month.IsZero() {
+		return monthStart(time.Now())
+	}
+	return this.month
+}
 
 // --- Pure date helpers (unit-testable without GL) ---
 
@@ -229,7 +242,8 @@ func (this *Calendar) OnLeftDown(x, y float64) {
 	if row < 0 || col < 0 {
 		return
 	}
-	grid := monthGrid(this.month.Year(), this.month.Month())
+	m := this.DisplayedMonth()
+	grid := monthGrid(m.Year(), m.Month())
 	if row >= len(grid) {
 		return
 	}
@@ -261,7 +275,8 @@ func (this *Calendar) hitCell(x, y float64) (int, int) {
 	if col < 0 || col >= 7 || row < 0 {
 		return -1, -1
 	}
-	grid := monthGrid(this.month.Year(), this.month.Month())
+	m := this.DisplayedMonth()
+	grid := monthGrid(m.Year(), m.Month())
 	if row >= len(grid) {
 		return -1, -1
 	}
@@ -286,7 +301,8 @@ func (this *Calendar) Draw(g paint.Painter) {
 
 // drawHeader paints the "<  2026年6月  >" row.
 func (this *Calendar) drawHeader(g paint.Painter, t *defaultTheme, w float64) {
-	title := fmt.Sprintf("%d年%d月", this.month.Year(), int(this.month.Month()))
+	m := this.DisplayedMonth()
+	title := fmt.Sprintf("%d年%d月", m.Year(), int(m.Month()))
 	cy := calendarPad + calendarHeaderH*0.5
 	this.drawCentered(g, t.Font, title, t.TextColor, 0, w, calendarPad, calendarHeaderH)
 
@@ -312,10 +328,11 @@ func (this *Calendar) drawWeekdays(g paint.Painter, t *defaultTheme) {
 // drawGrid paints the day cells: dimmed for adjacent-month days, an accent
 // fill for the selected day, an accent ring for today, and a hover wash.
 func (this *Calendar) drawGrid(g paint.Painter, t *defaultTheme) {
-	grid := monthGrid(this.month.Year(), this.month.Month())
+	m := this.DisplayedMonth()
+	grid := monthGrid(m.Year(), m.Month())
 	top := calendarGridTop()
 	today := dayStart(time.Now())
-	curMonth := this.month.Month()
+	curMonth := m.Month()
 
 	for row := range grid {
 		for col := 0; col < 7; col++ {
@@ -415,8 +432,8 @@ func (this *Calendar) SizeHints() SizeHints {
 }
 
 func (this *Calendar) EnumProperties(list core.IPropertyList) {
-	list.AddProperty("年", func() int { return this.month.Year() },
-		func(v int) { this.ShowMonth(v, this.month.Month()) })
-	list.AddProperty("月", func() int { return int(this.month.Month()) },
-		func(v int) { this.ShowMonth(this.month.Year(), time.Month(v)) })
+	list.AddProperty("年", func() int { return this.DisplayedMonth().Year() },
+		func(v int) { this.ShowMonth(v, this.DisplayedMonth().Month()) })
+	list.AddProperty("月", func() int { return int(this.DisplayedMonth().Month()) },
+		func(v int) { this.ShowMonth(this.DisplayedMonth().Year(), time.Month(v)) })
 }

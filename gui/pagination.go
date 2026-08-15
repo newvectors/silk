@@ -52,19 +52,20 @@ type Pagination struct {
 func NewPagination() *Pagination {
 	p := new(Pagination)
 	p.Init(p)
-	p.total = 1
-	p.current = 1
-	p.sibling = 1
-	p.boundary = 1
 	return p
 }
 
-// Init carries the hover sentinel, not NewPagination: the designer and the
-// .tdoc loader build widgets through the core factory, which reflects on Init
-// and never sees the constructor. At hover 0 the leading prev-arrow cell paints
-// the hover wash before the mouse has entered the pager.
-func (this *Pagination) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// Init carries the page-model defaults, not NewPagination: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. A factory pager left at zero counts
+// renders no page numbers at all, and keeps rendering only the current page
+// after SetTotalPages — sibling and boundary both being 0 collapse every run.
+func (this *Pagination) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.total = 1
+	this.current = 1
+	this.sibling = 1
+	this.boundary = 1
 	this.hover = -1
 }
 

@@ -28,10 +28,18 @@ type ColorPicker struct {
 func NewColorPicker() *ColorPicker {
 	p := new(ColorPicker)
 	p.Init(p)
-	p.color = paint.Color{66, 133, 244, 255}
-	p.palette = defaultColorPalette()
-	p.activeIdx = paletteIndexOf(p.palette, p.color)
 	return p
+}
+
+// Init carries the default colour and palette, not NewColorPicker: the
+// designer and the .tdoc loader build widgets through the core factory, which
+// reflects on Init and never sees the constructor. An empty palette draws no
+// swatches, so there is nothing for a click or an arrow key to land on.
+func (this *ColorPicker) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = paint.Color{66, 133, 244, 255}
+	this.palette = defaultColorPalette()
+	this.activeIdx = paletteIndexOf(this.palette, this.color)
 }
 
 // Color returns the currently selected color.

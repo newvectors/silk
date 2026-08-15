@@ -31,18 +31,20 @@ func init() {
 func NewAccordion() *Accordion {
 	p := new(Accordion)
 	p.Init(p)
-	p.multiExpand = false
-	p.headerH = 32
 	return p
 }
 
-// Init 携带"无悬停/无当前项"哨兵, 而不是 NewAccordion: 设计器和 .tdoc 加载器
-// 都经由 core 工厂建控件, 工厂只反射调用 Init, 看不到构造函数. 两者留在 0 时
-// 第 0 段会被画成悬停+键盘当前项(左侧强调条), 首次按下方向键也会从第 1 段起步.
-func (this *Accordion) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// Init carries the geometry and the sentinels, not NewAccordion: the designer
+// and the .tdoc loader build widgets through the core factory, which reflects
+// on Init and never sees the constructor. A zero headerH makes every header a
+// zero-height strip — hitTestHeader then matches nothing and no section can
+// ever be opened by a click.
+func (this *Accordion) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.multiExpand = false
 	this.hoverIdx = -1
 	this.curIdx = -1
+	this.headerH = 32
 }
 
 func (this *Accordion) MultiExpand() bool { return this.multiExpand }

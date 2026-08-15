@@ -25,9 +25,17 @@ type ToolBar struct {
 func NewToolBar() *ToolBar {
 	p := new(ToolBar)
 	p.Init(p)
-	p.iconSize = int(Theme().IconSize)
-	p.spacing = Theme().Spacing
 	return p
+}
+
+// Init carries the icon size and spacing, not NewToolBar: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. Icon buttons are sized from iconSize,
+// so a factory toolbar shrinks them to the button margins alone.
+func (this *ToolBar) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.iconSize = int(Theme().IconSize)
+	this.spacing = Theme().Spacing
 }
 
 func (this *ToolBar) EnumProperties(list core.IPropertyList) {

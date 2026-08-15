@@ -39,17 +39,17 @@ type VirtualList struct {
 func NewVirtualList() *VirtualList {
 	p := new(VirtualList)
 	p.Init(p)
-	p.itemHeight = 28
 	return p
 }
 
-// Init carries the selection/hover sentinels, not NewVirtualList: the designer
-// and the .tdoc loader build widgets through the core factory, which reflects on
-// Init and never sees the constructor. At selectedIdx 0 the list reports row 0
-// as selected and paints it with the selection colour before the user has
-// clicked anything.
-func (this *VirtualList) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// Init carries the row height and the sentinels, not NewVirtualList: the
+// designer and the .tdoc loader build widgets through the core factory, which
+// reflects on Init and never sees the constructor. Draw and hitTest both bail
+// out on itemHeight <= 0, so a factory list stays permanently blank however
+// many items it is given.
+func (this *VirtualList) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.itemHeight = 28
 	this.selectedIdx = -1
 	this.hoverIdx = -1
 }

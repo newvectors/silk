@@ -27,15 +27,16 @@ func init() {
 func NewBreadcrumb() *Breadcrumb {
 	p := new(Breadcrumb)
 	p.Init(p)
-	p.separator = "/"
 	return p
 }
 
-// Init 携带"无悬停"哨兵, 而不是 NewBreadcrumb: 设计器和 .tdoc 加载器都经由
-// core 工厂建控件, 工厂只反射调用 Init, 看不到构造函数. hoverIdx 留在 0 时
-// 第 0 项一上来就被画成悬停的链接色.
-func (this *Breadcrumb) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// Init carries the separator and the hover sentinel, not NewBreadcrumb: the
+// designer and the .tdoc loader build widgets through the core factory, which
+// reflects on Init and never sees the constructor. An empty separator draws
+// the trail as "home  docs" with nothing between the items.
+func (this *Breadcrumb) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.separator = "/"
 	this.hoverIdx = -1
 }
 

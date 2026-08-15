@@ -27,8 +27,16 @@ func init() {
 func NewTimeline() *Timeline {
 	p := new(Timeline)
 	p.Init(p)
-	p.vertical = true
 	return p
+}
+
+// Init carries the orientation, not NewTimeline: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. A factory timeline would otherwise lay its
+// steps out horizontally while its SizeHints ask for a tall vertical box.
+func (this *Timeline) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.vertical = true
 }
 
 func (this *Timeline) IsVertical() bool { return this.vertical }

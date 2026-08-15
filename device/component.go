@@ -77,17 +77,26 @@ func init() {
 func NewDeviceComponent() *DeviceComponent {
 	d := new(DeviceComponent)
 	d.Init(d)
+	return d
+}
+
+// Init carries the connection defaults, not NewDeviceComponent: the designer
+// and the .tdoc loader build components through the core factory, which
+// reflects on Init and never sees the constructor. A factory component left at
+// zero draws ":0" on the design surface and Start dials "tcp://:0" with unit
+// id 0.
+func (d *DeviceComponent) Init(self gui.IWidget) {
+	d.Widget.Init(self)
 	d.host = "127.0.0.1"
 	d.port = 502
 	d.unitID = 1
 	d.slot = 1
 	d.periodMs = 1000
-	return d
 }
 
 // --- design-time properties (scalars, so the property sheet + codegen handle them) ---
 
-func (d *DeviceComponent) Protocol() string    { return d.protocol.String() }
+func (d *DeviceComponent) Protocol() string     { return d.protocol.String() }
 func (d *DeviceComponent) SetProtocol(s string) { d.protocol = parseProtocol(s); d.Self().Update() }
 func (d *DeviceComponent) Host() string         { return d.host }
 func (d *DeviceComponent) SetHost(s string)     { d.host = s; d.Self().Update() }

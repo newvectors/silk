@@ -109,18 +109,17 @@ const diffGutterWidth = 30.0
 func NewDiffView() *DiffView {
 	p := new(DiffView)
 	p.Init(p)
-	p.showGutter = true
 	return p
 }
 
-// Init carries the active-row sentinel, not NewDiffView: the designer and the
-// .tdoc loader build widgets through the core factory, which reflects on Init
-// and never sees the constructor. At activeChangeRow 0 a fresh view reports row
-// 0 as the active change, paints its marker there, and JumpToNextChange starts
-// searching past it — so a change on the first row is skipped.
-func (this *DiffView) Init(iw IWidget) {
-	this.Widget.Init(iw)
+// Init carries the gutter default and the active-row sentinel, not
+// NewDiffView: the designer and the .tdoc loader build widgets through the
+// core factory, which reflects on Init and never sees the constructor. A
+// factory viewer would otherwise open with the line-number gutter suppressed.
+func (this *DiffView) Init(self IWidget) {
+	this.Widget.Init(self)
 	this.activeChangeRow = -1
+	this.showGutter = true
 }
 
 // ShowGutter reports whether the per-side line-number gutter is rendered.

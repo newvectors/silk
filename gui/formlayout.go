@@ -30,8 +30,16 @@ type FormLayout struct {
 func NewFormLayout() *FormLayout {
 	p := new(FormLayout)
 	p.Init(p)
-	p.labelWidth = 100
 	return p
+}
+
+// Init carries the label column width, not NewFormLayout: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. A zero labelWidth starts the field
+// column at x=0, so every field paints on top of its own label.
+func (this *FormLayout) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.labelWidth = 100
 }
 
 func (this *FormLayout) LabelWidth() float64 {

@@ -33,18 +33,42 @@ func NewDatePicker() *DatePicker {
 	p.year = now.Year()
 	p.month = int(now.Month())
 	p.day = now.Day()
-	p.format = "2006-01-02"
 	return p
 }
 
+// Init carries the display format, not NewDatePicker: the designer and the
+// .tdoc loader build widgets through the core factory, which reflects on Init
+// and never sees the constructor.
+//
+// The date itself is deliberately left at its zero value here rather than
+// stamped from time.Now(): Year/Month/Day resolve an unset date to today, so
+// Init stays free of the clock while a factory-built picker still shows a real
+// date instead of 0000-00-00.
+func (this *DatePicker) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.format = "2006-01-02"
+}
+
 // Year returns the currently selected year.
-func (this *DatePicker) Year() int { return this.year }
+func (this *DatePicker) Year() int { y, _, _ := this.date(); return y }
 
 // Month returns the currently selected month (1-12).
-func (this *DatePicker) Month() int { return this.month }
+func (this *DatePicker) Month() int { _, m, _ := this.date(); return m }
 
 // Day returns the currently selected day (1-31).
-func (this *DatePicker) Day() int { return this.day }
+func (this *DatePicker) Day() int { _, _, d := this.date(); return d }
+
+// date returns the selected year/month/day, resolving the all-zero date a
+// factory-built picker starts with to today. Only the fully unset triple
+// resolves — SetDate clamps month and day into range, so any date a caller or
+// the .tdoc loader has actually set reads back verbatim.
+func (this *DatePicker) date() (year, month, day int) {
+	if this.year == 0 && this.month == 0 && this.day == 0 {
+		now := time.Now()
+		return now.Year(), int(now.Month()), now.Day()
+	}
+	return this.year, this.month, this.day
+}
 
 // SetDate sets the date value.
 func (this *DatePicker) SetDate(year, month, day int) {
@@ -86,7 +110,8 @@ func (this *DatePicker) SigDateChanged(fn func(year, month, day int)) {
 }
 
 func (this *DatePicker) displayText() string {
-	return fmt.Sprintf("%04d-%02d-%02d", this.year, this.month, this.day)
+	y, m, d := this.date()
+	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
 }
 
 // --- Drawing ---
@@ -169,9 +194,9 @@ func (this *DatePicker) SizeHints() SizeHints {
 }
 
 func (this *DatePicker) EnumProperties(list core.IPropertyList) {
-	list.AddProperty("Year", this.Year, func(v int) { this.SetDate(v, this.month, this.day) })
-	list.AddProperty("Month", this.Month, func(v int) { this.SetDate(this.year, v, this.day) })
-	list.AddProperty("Day", this.Day, func(v int) { this.SetDate(this.year, this.month, v) })
+	list.AddProperty("Year", this.Year, func(v int) { this.SetDate(v, this.Month(), this.Day()) })
+	list.AddProperty("Month", this.Month, func(v int) { this.SetDate(this.Year(), v, this.Day()) })
+	list.AddProperty("Day", this.Day, func(v int) { this.SetDate(this.Year(), this.Month(), v) })
 }
 
 // --- Calendar Popup ---
@@ -188,8 +213,8 @@ func newDateCalendarPopup(owner *DatePicker) *dateCalendarPopup {
 	p := new(dateCalendarPopup)
 	p.Init(p)
 	p.owner = owner
-	p.viewYear = owner.year
-	p.viewMonth = owner.month
+	p.viewYear = owner.Year()
+	p.viewMonth = owner.Month()
 	p.hoverDay = -1
 	p.SetParent(owner)
 	return p
@@ -279,8 +304,8 @@ func (this *dateCalendarPopup) Draw(g paint.Painter) {
 	maxDay := daysInMonth(this.viewYear, this.viewMonth)
 
 	selectedDay := -1
-	if this.owner.year == this.viewYear && this.owner.month == this.viewMonth {
-		selectedDay = this.owner.day
+	if this.owner.Year() == this.viewYear && this.owner.Month() == this.viewMonth {
+		selectedDay = this.owner.Day()
 	}
 
 	day := 1

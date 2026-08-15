@@ -55,8 +55,6 @@ type Spinner struct {
 func NewSpinner() *Spinner {
 	s := new(Spinner)
 	s.Init(s)
-	s.busy = true
-	s.startTime = time.Now()
 	s.startAnim()
 	return s
 }
@@ -65,11 +63,19 @@ func NewSpinner() *Spinner {
 // loader build widgets through the core factory, which reflects on Init and
 // never sees the constructor. Draw bails below 3 dots, so a factory spinner
 // left at zero could not render even once SetBusy(true) armed it.
+//
+// The busy flag and the phase origin belong here too — a factory spinner that
+// starts !busy draws nothing at all. Arming the heartbeat does not: Init runs
+// for every reflect-built widget, including throwaway instances the designer
+// never shows, and each startAnim would leave a looping Animation behind. The
+// heartbeat is started by NewSpinner and by SetBusy(true) instead.
 func (this *Spinner) Init(self IWidget) {
 	this.Widget.Init(self)
 	this.color = Theme().HighLightColor
 	this.dotCount = 8
 	this.cycle = time.Second
+	this.busy = true
+	this.startTime = time.Now()
 }
 
 // SetColor overrides the dot colour. Defaults to the theme accent so
@@ -130,8 +136,12 @@ func (this *Spinner) IsBusy() bool {
 // the phase so the spinner doesn't appear to jump when reactivated;
 // false stops the underlying Animation so the window event loop can
 // idle when nothing else needs ticking.
+//
+// A factory-built spinner starts busy but unarmed (Init sets the flag,
+// not the heartbeat), so SetBusy(true) still has work to do there even
+// though the flag already reads true.
 func (this *Spinner) SetBusy(b bool) {
-	if this.busy == b {
+	if this.busy == b && (!b || this.anim != nil) {
 		return
 	}
 	this.busy = b
