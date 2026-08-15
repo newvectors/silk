@@ -62,11 +62,20 @@ type Tank struct {
 func NewTank() *Tank {
 	p := new(Tank)
 	p.Init(p)
-	p.min = 0
-	p.max = 100
-	p.color = paint.Color{R: 33, G: 150, B: 243, A: 255} // blue
-	p.showLabel = true
 	return p
+}
+
+// Init carries the engineering range and the display defaults, not NewTank:
+// the designer and the .tdoc loader build widgets through the core factory,
+// which reflects on Init and never sees the constructor. Left there, the range
+// comes up as 0..0 so EngValue() reads 0 at every level, the label is off and
+// the liquid is drawn in a fully transparent color.
+func (this *Tank) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.min = 0
+	this.max = 100
+	this.color = paint.Color{R: 33, G: 150, B: 243, A: 255} // blue
+	this.showLabel = true
 }
 
 // SetLevel sets the fill fraction, clamped to [0,1].
@@ -929,11 +938,18 @@ type Thermometer struct {
 func NewThermometer() *Thermometer {
 	p := new(Thermometer)
 	p.Init(p)
-	p.min = 0
-	p.max = 100
-	p.value = 0
-	p.color = paint.Color{R: 239, G: 83, B: 80, A: 255} // red
 	return p
+}
+
+// Init carries the range and the mercury color, not NewThermometer: the
+// designer and the .tdoc loader build widgets through the core factory, which
+// reflects on Init and never sees the constructor. A 0..0 range clamps every
+// SetValue to 0 and makes Fraction() return 0, so the column never fills.
+func (this *Thermometer) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.min = 0
+	this.max = 100
+	this.color = paint.Color{R: 239, G: 83, B: 80, A: 255} // red
 }
 
 // SetValue sets the temperature reading, clamped to [Min,Max].
@@ -1078,12 +1094,21 @@ type ValueBar struct {
 func NewValueBar() *ValueBar {
 	p := new(ValueBar)
 	p.Init(p)
-	p.min = 0
-	p.max = 100
-	p.normalColor = paint.Color{R: 76, G: 175, B: 80, A: 255} // green
-	p.warnColor = paint.Color{R: 255, G: 179, B: 0, A: 255}   // amber
-	p.alarmColor = paint.Color{R: 239, G: 83, B: 80, A: 255}  // red
 	return p
+}
+
+// Init carries the range and the band colors, not NewValueBar: the designer
+// and the .tdoc loader build widgets through the core factory, which reflects
+// on Init and never sees the constructor. A 0..0 range clamps every SetValue
+// to 0 and makes Fraction() return 0, so the bar never leaves the floor and
+// the alarm bands are drawn in a fully transparent color.
+func (this *ValueBar) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.min = 0
+	this.max = 100
+	this.normalColor = paint.Color{R: 76, G: 175, B: 80, A: 255} // green
+	this.warnColor = paint.Color{R: 255, G: 179, B: 0, A: 255}   // amber
+	this.alarmColor = paint.Color{R: 239, G: 83, B: 80, A: 255}  // red
 }
 
 // SetValue sets the bar value, clamped to [Min,Max].

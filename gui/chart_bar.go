@@ -34,12 +34,22 @@ func init() {
 func NewBarChart() *BarChart {
 	p := new(BarChart)
 	p.Init(p)
-	p.autoScale = true
-	p.showValues = true
-	p.barGap = 6
-	p.bgColor = paint.Color{R: 255, G: 255, B: 255, A: 255}
-	p.maxValue = 100
 	return p
+}
+
+// Init carries the scale and the display defaults, not NewBarChart: the
+// designer and the .tdoc loader build widgets through the core factory, which
+// reflects on Init and never sees the constructor. Left in the constructor,
+// maxValue comes up as 0 with auto-scaling off, so AddBar never reseeds it and
+// Draw divides by the maxV == 0 fallback of 1 — every bar is drawn its own
+// value in pixels tall and paints straight over the rest of the form.
+func (this *BarChart) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.autoScale = true
+	this.showValues = true
+	this.barGap = 6
+	this.bgColor = paint.Color{R: 255, G: 255, B: 255, A: 255}
+	this.maxValue = 100
 }
 
 // AddBar appends a bar.

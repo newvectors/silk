@@ -32,10 +32,19 @@ func init() {
 func NewGauge() *Gauge {
 	p := new(Gauge)
 	p.Init(p)
-	p.min = 0
-	p.max = 100
-	p.bgColor = paint.Color{R: 255, G: 255, B: 255, A: 255}
 	return p
+}
+
+// Init carries the range and the background, not NewGauge: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. A range left in the constructor comes
+// up as 0..0, which clamps every SetValue to 0, pins the needle at the left
+// stop and prints a scale of all zeroes.
+func (this *Gauge) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.min = 0
+	this.max = 100
+	this.bgColor = paint.Color{R: 255, G: 255, B: 255, A: 255}
 }
 
 // SetValue sets the needle position.
