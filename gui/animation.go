@@ -188,9 +188,14 @@ func (a *Animation) Start() {
 	animManager.add(a)
 }
 
-// Stop terminates the animation immediately.
+// Stop terminates the animation immediately and unregisters it.
+// Marking it AnimDone is not enough on its own: the manager only evicts
+// on Tick, and the loop only Ticks while something is still moving, so a
+// stopped animation could otherwise stay registered — holding its
+// onUpdate closure, and the widget that closure captured — forever.
 func (a *Animation) Stop() {
 	a.state = AnimDone
+	animManager.remove(a)
 }
 
 // Pause suspends a running animation, preserving its current progress.
@@ -419,8 +424,45 @@ func (m *animationManager) add(a *Animation) {
 	m.animations = append(m.animations, a)
 }
 
+// remove drops a from the registry. A registered entry has no identity
+// beyond its pointer, so that is what we match on. The slice is rebuilt
+// rather than shifted in place because Stop() can be called from inside
+// an OnUpdate/OnDone callback, i.e. from under Tick, which is filtering
+// the same backing array.
+func (m *animationManager) remove(a *Animation) {
+	for i, x := range m.animations {
+		if x != a {
+			continue
+		}
+		rest := make([]*Animation, 0, len(m.animations)-1)
+		rest = append(rest, m.animations[:i]...)
+		rest = append(rest, m.animations[i+1:]...)
+		m.animations = rest
+		return
+	}
+}
+
 func (m *animationManager) addGroup(g *AnimationGroup) {
 	m.groups = append(m.groups, g)
+}
+
+// activeCount reports how many registered entries will actually advance
+// on the next Tick. A paused entry stays registered so Resume() can pick
+// it up again, but it moves nothing; a finished one is dead weight until
+// the next Tick evicts it. Neither is a reason to keep the loop awake.
+func (m *animationManager) activeCount() int {
+	n := 0
+	for _, a := range m.animations {
+		if a.state == AnimRunning {
+			n++
+		}
+	}
+	for _, g := range m.groups {
+		if g.state == AnimRunning {
+			n++
+		}
+	}
+	return n
 }
 
 // Tick 应在每帧调用（由事件循环驱动）
@@ -450,6 +492,11 @@ func AnimationTick() {
 }
 
 // HasActiveAnimations returns true if any animations or groups are currently running.
+// MainLoop polls this to choose between the 1/60 animation tick and the
+// idle wait, and forces every visible window dirty while it holds — so
+// it has to measure running state, not how many entries happen to be
+// registered. Counting registrations let a single paused (or merely
+// lingering) entry pin the loop at 60fps for the life of the process.
 func HasActiveAnimations() bool {
-	return len(animManager.animations) > 0 || len(animManager.groups) > 0
+	return animManager.activeCount() > 0
 }

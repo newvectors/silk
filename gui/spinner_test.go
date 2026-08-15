@@ -10,14 +10,8 @@ import (
 // TestNewSpinnerDefaults locks in the construction-time settings so a
 // regression that flipped any one of them surfaces as a single
 // failing test rather than leaking through the demo's visual diff.
-//
-// SetBusy(false) on cleanup matters — the construction-time
-// startAnim() registers a looping Animation with the global
-// animManager, which would otherwise survive past this test and
-// leak into TestSetBusy* assertions.
 func TestNewSpinnerDefaults(t *testing.T) {
 	s := NewSpinner()
-	defer s.SetBusy(false)
 	if !s.IsBusy() {
 		t.Errorf("new spinner should default busy=true (caller toggles off if needed)")
 	}
@@ -39,11 +33,16 @@ func TestNewSpinnerDefaults(t *testing.T) {
 // spinner's own Animation (s.anim) rather than HasActiveAnimations()
 // — the latter is global state polluted by other tests' lingering
 // animations, so a global assertion would be flaky in parallel runs.
+//
+// The spinner is parented first: the heartbeat is armed on attach, not
+// at construction, because a spinner nobody can see must not hold the
+// event loop at the animation tick.
 func TestSetBusyTogglesAnimationState(t *testing.T) {
 	s := NewSpinner() // busy=true at construction
 	defer s.SetBusy(false)
+	s.SetParent(NewForm())
 	if s.anim == nil || s.anim.State() != AnimRunning {
-		t.Errorf("new busy spinner must have a running animation; got %v", animState(s))
+		t.Errorf("attached busy spinner must have a running animation; got %v", animState(s))
 	}
 	s.SetBusy(false)
 	if s.anim != nil {
@@ -69,7 +68,11 @@ func animState(s *Spinner) interface{} {
 // no-op SetBusy.
 func TestSetBusyIdempotent(t *testing.T) {
 	s := NewSpinner()
+	s.SetParent(NewForm()) // arms the heartbeat; see canDrive
 	first := s.anim
+	if first == nil {
+		t.Fatalf("attached busy spinner has no animation to compare against")
+	}
 	s.SetBusy(true) // already busy, should be no-op
 	if s.anim != first {
 		t.Errorf("redundant SetBusy(true) should not replace the animation")

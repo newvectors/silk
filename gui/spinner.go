@@ -21,7 +21,7 @@ func init() {
 //
 //	sp := gui.NewSpinner()
 //	sp.SetSize(24, 24)
-//	parent.AddChild(sp)
+//	sp.SetParent(parent)
 //	// later, when the long-running op finishes:
 //	sp.SetBusy(false)
 //
@@ -32,7 +32,9 @@ func init() {
 // Internally a single looping Animation drives redraws — its
 // onUpdate is a no-op, but its presence makes
 // gui.HasActiveAnimations() report true so the window event loop
-// keeps ticking. The phase that Draw uses is computed straight from
+// keeps ticking. That heartbeat exists only while the spinner could
+// actually be seen (busy, attached, visible); see canDrive.
+// The phase that Draw uses is computed straight from
 // time.Since(startTime), so the visual is independent of the
 // animation tick rate (it stays smooth even if AnimationTick lands
 // on irregular intervals).
@@ -52,10 +54,14 @@ type Spinner struct {
 // colour, 8 dots, 1-second rotation cycle. The widget starts in the
 // busy state so adding it to a layout immediately animates — call
 // SetBusy(false) afterwards if you want to start hidden.
+//
+// No heartbeat is armed here. A spinner that has not been parented
+// cannot be on screen, and arming at construction meant every spinner
+// ever built — including ones dropped without being used — registered a
+// looping Animation that nothing could ever evict. SetParent arms it.
 func NewSpinner() *Spinner {
 	s := new(Spinner)
 	s.Init(s)
-	s.startAnim()
 	return s
 }
 
@@ -147,11 +153,74 @@ func (this *Spinner) SetBusy(b bool) {
 	this.busy = b
 	if b {
 		this.startTime = time.Now()
+	}
+	this.syncAnim()
+	this.Self().Update()
+}
+
+// SetParent arms or drops the heartbeat along with the attachment. A
+// spinner only earns the 60fps tick once it is in a widget tree, and
+// loses it the moment it is detached — so reparenting away, or dropping
+// the last reference to a spinner that was never attached, leaves
+// nothing registered with animManager.
+func (this *Spinner) SetParent(parent IWidget) {
+	this.Widget.SetParent(parent)
+	this.syncAnim()
+}
+
+// Detach must route through Spinner.SetParent; Widget.Detach calls the
+// embedded Widget.SetParent directly and would skip the heartbeat.
+func (this *Spinner) Detach() {
+	this.SetParent(nil)
+}
+
+// OnShow / OnHide are the widget tree's visibility seam (see
+// Widget.setVisible). A hidden spinner paints nothing, so it must not
+// keep the event loop at the animation tick either — hiding one used to
+// cost more CPU than showing it, because the loop kept ticking and
+// dirtying windows for a widget that drew nothing.
+//
+// SetVisible does not repaint on its own, and the heartbeat we just
+// dropped is what used to dirty the window on the next frame, so the
+// vacated rect is invalidated here — same as Menu.OnHide.
+func (this *Spinner) OnShow() {
+	this.syncAnim()
+	this.Self().Update()
+}
+
+func (this *Spinner) OnHide() {
+	this.syncAnim()
+	this.Self().Update()
+}
+
+// canDrive reports whether this spinner is in a position to be seen:
+// busy, attached to a tree, and not hidden itself. Only such a spinner
+// may hold the loop at the animation tick.
+//
+// Deliberately NOT gated on ancestor visibility. Widget.setVisible
+// dispatches OnShow/OnHide to the widget it was called on and never to
+// descendants, so a spinner attached under a hidden ancestor would answer
+// "no" here and never be re-asked -- StackedWidget.AddPage hides the page
+// it just took, so the ordinary "add the page, then fill it" order left a
+// tab's loading spinner painted but frozen forever. The hidden-spinner
+// case that costs a core (68% measured) is spinner.Hide(), which
+// IsVisible() plus the OnHide seam already catches. Gating on ancestors
+// needs a real propagation seam in Widget.setVisible; until that exists,
+// a leak while an ancestor is hidden beats a spinner that never turns.
+func (this *Spinner) canDrive() bool {
+	self := this.Self()
+	return this.busy && self.Parent() != nil && self.IsVisible()
+}
+
+// syncAnim makes the heartbeat match canDrive(). Every seam that can
+// change the answer — SetBusy, SetParent, OnShow, OnHide — funnels
+// through here, so the arming rule lives in exactly one place.
+func (this *Spinner) syncAnim() {
+	if this.canDrive() {
 		this.startAnim()
 	} else {
 		this.stopAnim()
 	}
-	this.Self().Update()
 }
 
 // startAnim spins up a heartbeat Animation if none is active. The
