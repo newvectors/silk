@@ -336,18 +336,29 @@ const tableDoubleClickInterval = 400 * time.Millisecond
 func NewTable() *Table {
 	p := new(Table)
 	p.Init(p)
-	p.selectedRow = -1
-	p.sortColumn = -1
-	p.resizeCol = -1
-	p.hoverBoundary = -1
-	p.editRow = -1
-	p.editCol = -1
-	p.lastClickRow = -1
-	p.lastClickCol = -1
-	p.selectAnchor = -1
-	p.scrollArea = NewScrollArea()
-	p.scrollArea.SetParent(p)
 	return p
+}
+
+// Init builds the scroll area and seeds the "nothing selected / nothing
+// hovered" sentinels. All of it lives here rather than in NewTable because the
+// factory (core.RegisterFactory above) constructs a Table by reflection and
+// calls Init and nothing else: a table the designer drops on the canvas skips
+// NewTable entirely, so setup left there gave it a nil scrollArea — Layout
+// dereferenced it on the first SetBounds and panicked — and every sentinel at
+// row/column 0 instead of -1.
+func (this *Table) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.selectedRow = -1
+	this.sortColumn = -1
+	this.resizeCol = -1
+	this.hoverBoundary = -1
+	this.editRow = -1
+	this.editCol = -1
+	this.lastClickRow = -1
+	this.lastClickCol = -1
+	this.selectAnchor = -1
+	this.scrollArea = NewScrollArea()
+	this.scrollArea.SetParent(iw)
 }
 
 // SetModel sets the TableModel that provides data for this table.
