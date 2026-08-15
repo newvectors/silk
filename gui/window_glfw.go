@@ -1257,6 +1257,42 @@ func markAllWindowsDirty() {
 	glfw.PostEmptyEvent()
 }
 
+// serviceUIFrame runs the per-iteration service work an event loop owes the
+// rest of the framework, after this frame's input has been taken and before its
+// paint pass: the watchdog heartbeat, due timers, tasks queued from background
+// goroutines, and one animation frame. Both loops in this file call it, so
+// neither can quietly drift from the other — ShowModal open-coded a subset
+// (timers and animation, no heartbeat, no drain), and for as long as a modal
+// dialog was up everything gui.Post had queued (dlv callbacks, LSP results, git
+// refreshes, toasts) sat in the queue with nothing to drain it while the
+// watchdog, fed only from MainLoop, reported the whole dialog as a stall.
+// window_windows.go keeps a serviceUIFrame of its own for the same reason.
+//
+// The order is the contract. The heartbeat is stamped first, so "time since the
+// last beat" covers the whole iteration and a callback that blocks inside it is
+// still caught. The drain comes after input and timers and before the paint
+// pass, so a task's mutation reaches the screen in this frame rather than the
+// next. That drain runs its batch unlocked (see uiqueue.go), which is what keeps
+// the re-entrant cases safe: a task may end this modal — the loop finishes the
+// iteration and its own top-of-loop condition stops it — or open a nested one,
+// whose serviceUIFrame sees only what was queued after the outer snapshot.
+func serviceUIFrame() {
+	uiHeartbeat()
+	processTimers()
+
+	// Run tasks queued from background goroutines (dlv/LSP callbacks)
+	// on the main thread now that this frame's input + timers are done
+	// and before the paint pass, so GUI state is mutated safely.
+	drainUITasks()
+
+	// Advance the animation engine one frame. Progresses every active
+	// Animation/AnimationGroup off the wall clock and evicts finished
+	// ones, so HasActiveAnimations() drops back to false when nothing is
+	// running and the loop can return to the idle wait instead of
+	// spinning at 60fps.
+	AnimationTick()
+}
+
 // MainLoop runs the GLFW event loop.
 //
 // Frame-pacing strategy:
@@ -1291,20 +1327,7 @@ func MainLoop() {
 		} else {
 			glfw.WaitEventsTimeout(0.047)
 		}
-		uiHeartbeat()
-		processTimers()
-
-		// Run tasks queued from background goroutines (dlv/LSP callbacks)
-		// on the main thread now that this frame's input + timers are done
-		// and before the paint pass, so GUI state is mutated safely.
-		drainUITasks()
-
-		// Advance the animation engine one frame. Progresses every active
-		// Animation/AnimationGroup off the wall clock and evicts finished
-		// ones, so HasActiveAnimations() drops back to false when nothing is
-		// running and the loop can return to the idle wait instead of
-		// spinning at 60fps.
-		AnimationTick()
+		serviceUIFrame()
 
 		// Request a repaint every iteration while the perf overlay is live or
 		// any animation is running. Animations need the forced dirty because
@@ -2164,14 +2187,15 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		} else {
 			glfw.WaitEventsTimeout(0.047)
 		}
-		processTimers()
+		// Same per-iteration service work as MainLoop, for the same reasons: a
+		// modal dialog is an event loop like any other, so posted tasks must
+		// keep running and the watchdog must keep being fed while it is open,
+		// and the animation engine must keep ticking or any spinner/fade/slide
+		// freezes for the life of the dialog.
+		serviceUIFrame()
 
-		// Keep the animation engine live inside the modal loop too — without
-		// this, any spinner/fade/slide freezes while a modal dialog is open.
-		// Same contract as MainLoop: tick advances + evicts, and we force a
-		// repaint only while animations run (an idle modal stays on the 47ms
-		// wait, so no CPU spin).
-		AnimationTick()
+		// Force a repaint only while animations run (an idle modal stays on the
+		// 47ms wait, so no CPU spin).
 		if HasActiveAnimations() {
 			for _, win := range winMap {
 				if win != nil && win.IsVisible() {
