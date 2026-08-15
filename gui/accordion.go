@@ -32,10 +32,17 @@ func NewAccordion() *Accordion {
 	p := new(Accordion)
 	p.Init(p)
 	p.multiExpand = false
-	p.hoverIdx = -1
-	p.curIdx = -1
 	p.headerH = 32
 	return p
+}
+
+// Init 携带"无悬停/无当前项"哨兵, 而不是 NewAccordion: 设计器和 .tdoc 加载器
+// 都经由 core 工厂建控件, 工厂只反射调用 Init, 看不到构造函数. 两者留在 0 时
+// 第 0 段会被画成悬停+键盘当前项(左侧强调条), 首次按下方向键也会从第 1 段起步.
+func (this *Accordion) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.hoverIdx = -1
+	this.curIdx = -1
 }
 
 func (this *Accordion) MultiExpand() bool { return this.multiExpand }

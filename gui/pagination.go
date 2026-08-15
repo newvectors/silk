@@ -56,8 +56,16 @@ func NewPagination() *Pagination {
 	p.current = 1
 	p.sibling = 1
 	p.boundary = 1
-	p.hover = -1
 	return p
+}
+
+// Init carries the hover sentinel, not NewPagination: the designer and the
+// .tdoc loader build widgets through the core factory, which reflects on Init
+// and never sees the constructor. At hover 0 the leading prev-arrow cell paints
+// the hover wash before the mouse has entered the pager.
+func (this *Pagination) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.hover = -1
 }
 
 // TotalPages returns the configured page count.

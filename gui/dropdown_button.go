@@ -31,8 +31,17 @@ func NewDropdownButton() *DropdownButton {
 	p := new(DropdownButton)
 	p.Init(p)
 	p.text = ""
-	p.selected = -1
 	return p
+}
+
+// Init carries the selection sentinel, not NewDropdownButton: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. At selected 0 the button reports the
+// first item as chosen before the menu has ever been opened, while its caption
+// still shows the "Select" placeholder.
+func (this *DropdownButton) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.selected = -1
 }
 
 func (this *DropdownButton) Text() string { return this.text }

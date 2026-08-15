@@ -32,7 +32,6 @@ type Menu struct {
 func NewMenu(popup bool) *Menu {
 	m := new(Menu)
 	m.Init(m)
-	m.highlight = -1
 	if popup {
 		m.SetVertical(true)
 		m.SetVisible(false)
@@ -49,6 +48,15 @@ func NewMenuBar() *Menu {
 // 新建弹出菜单
 func NewPopupMenu() *Menu {
 	return NewMenu(true)
+}
+
+// Init 携带高亮哨兵, 而不是 NewMenu: 设计器和 .tdoc 加载器都经由 core 工厂
+// 建控件, 工厂只反射调用 Init, 看不到构造函数. 这一步同时覆盖 ButtonBox ——
+// 它内嵌 Menu 却从不走 NewMenu, highlight 为 0 时首项被当成"已键盘高亮",
+// 回车会在任何方向键按下之前就触发它, 向下键也会跳过它.
+func (this *Menu) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.highlight = -1
 }
 
 func (this *Menu) Draw(g paint.Painter) {

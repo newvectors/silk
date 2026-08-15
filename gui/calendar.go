@@ -54,9 +54,17 @@ func NewCalendar() *Calendar {
 	now := time.Now()
 	c.selected = dayStart(now)
 	c.month = monthStart(now)
-	c.hoverRow = -1
-	c.hoverCol = -1
 	return c
+}
+
+// Init carries the hover sentinels, not NewCalendar: the designer and the
+// .tdoc loader build widgets through the core factory, which reflects on Init
+// and never sees the constructor. At hoverRow/hoverCol 0 the top-left day cell
+// draws the hover wash before the mouse has ever entered the grid.
+func (this *Calendar) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.hoverRow = -1
+	this.hoverCol = -1
 }
 
 // SelectedDate returns the currently selected date (at midnight, local).

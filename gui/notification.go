@@ -41,8 +41,16 @@ func init() {
 func NewNotificationPanel() *NotificationPanel {
 	p := new(NotificationPanel)
 	p.Init(p)
-	p.hoverIdx = -1
 	return p
+}
+
+// Init carries the hover sentinel, not NewNotificationPanel: the designer and
+// the .tdoc loader build widgets through the core factory, which reflects on
+// Init and never sees the constructor. At hoverIdx 0 the first card paints the
+// hover background before the mouse has entered the panel.
+func (this *NotificationPanel) Init(iw IWidget) {
+	this.Widget.Init(iw)
+	this.hoverIdx = -1
 }
 
 func (this *NotificationPanel) Items() []NotificationItem { return this.items }
