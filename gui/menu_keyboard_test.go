@@ -100,6 +100,7 @@ func TestNextSelectableIndexNone(t *testing.T) {
 // btn3, returning the menu and its buttons for assertions.
 func newNavMenu() (*Menu, *Button, *Button, *Button) {
 	m := NewPopupMenu()
+	m.setVisible(true) // Shown logical popup; no native resources are needed.
 	b0 := m.AddButton1("Item0", nil)
 	m.AddSeparator()
 	b2 := m.AddButton1("Item2", nil)
@@ -170,6 +171,7 @@ func TestMenuKeyboardEnterTriggers(t *testing.T) {
 	}
 
 	// Space activates too: move highlight to the first item and press Space.
+	m.setVisible(true) // The previous command correctly closed the popup.
 	m.OnKeyDown(KeyHome, false)
 	m.OnKeyDown(KeySpace, false)
 	if fired0 != 1 {

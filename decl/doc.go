@@ -31,9 +31,8 @@
 //
 // # What is NOT in this package
 //
-// A bidirectional Go-source parser/emitter is intentionally deferred.
-// First we prove the AST shape round-trips losslessly with TDoc and the
-// runtime (this package). The Go-source codec lives next to it, in a
-// future decl/codec_go.go, and only matters when an author wants the
-// designer to edit code they hand-wrote.
+// Importing arbitrary hand-written Go source is intentionally deferred.
+// ToGo emits builder expressions from the AST, and cmd/silkgen wraps them in
+// a compilable Go file. Build does not evaluate Expr or attach Ref/Bind event
+// handlers: the host application wires those explicitly through BuildWithIndex.
 package decl

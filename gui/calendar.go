@@ -291,7 +291,10 @@ var calendarWeekdayLabels = []string{"一", "二", "三", "四", "五", "六", "
 
 func (this *Calendar) Draw(g paint.Painter) {
 	t := Theme()
-	w, _ := this.Size()
+	w, h := this.Size()
+	g.Rectangle(0, 0, w, h)
+	g.SetBrush1(t.ViewBGColor)
+	g.Fill()
 	g.SetFont(t.Font)
 
 	this.drawHeader(g, t, w)
@@ -318,7 +321,7 @@ func (this *Calendar) drawHeader(g paint.Painter, t *defaultTheme, w float64) {
 // drawWeekdays paints the Mon..Sun column header labels.
 func (this *Calendar) drawWeekdays(g paint.Painter, t *defaultTheme) {
 	y := calendarPad + calendarHeaderH
-	label := paint.Color{120, 120, 120, 255}
+	label := t.TabTextColor
 	for col, name := range calendarWeekdayLabels {
 		x := calendarPad + float64(col)*calendarCellW
 		this.drawCentered(g, t.Font, name, label, x, calendarCellW, y, calendarWeekRowH)
@@ -328,6 +331,7 @@ func (this *Calendar) drawWeekdays(g paint.Painter, t *defaultTheme) {
 // drawGrid paints the day cells: dimmed for adjacent-month days, an accent
 // fill for the selected day, an accent ring for today, and a hover wash.
 func (this *Calendar) drawGrid(g paint.Painter, t *defaultTheme) {
+	selectedBG, selectedText := dateSelectionColors(t)
 	m := this.DisplayedMonth()
 	grid := monthGrid(m.Year(), m.Month())
 	top := calendarGridTop()
@@ -349,11 +353,11 @@ func (this *Calendar) drawGrid(g paint.Painter, t *defaultTheme) {
 			// wash on hover otherwise.
 			if selected {
 				calendarRoundRect(g, x+2, y+2, calendarCellW-4, calendarCellH-4, 4)
-				g.SetBrush1(t.HighLightColor)
+				g.SetBrush1(selectedBG)
 				g.Fill()
 			} else if hovered {
 				calendarRoundRect(g, x+2, y+2, calendarCellW-4, calendarCellH-4, 4)
-				g.SetBrush1(paint.Color{230, 230, 245, 255})
+				g.SetBrush1(t.ButtonHoverBGColor)
 				g.Fill()
 			}
 
@@ -361,17 +365,18 @@ func (this *Calendar) drawGrid(g paint.Painter, t *defaultTheme) {
 			// filled selection — the fill is signal enough).
 			if isToday && !selected {
 				calendarRoundRect(g, x+2, y+2, calendarCellW-4, calendarCellH-4, 4)
-				g.SetPen1(t.HighLightColor, 1.5)
+				g.SetPen1(selectedBG, 1.5)
 				g.Stroke()
 			}
 
-			// Foreground colour: white on the accent fill, dimmed for
-			// adjacent-month spill days, normal text otherwise.
+			// Pair selected ink with its accent fill. Adjacent-month days
+			// use secondary ink except on hover, where normal ink keeps
+			// the small numerals readable against the hover wash.
 			fg := t.TextColor
 			if selected {
-				fg = paint.Color{255, 255, 255, 255}
-			} else if !inMonth {
-				fg = paint.Color{180, 180, 180, 255}
+				fg = selectedText
+			} else if !inMonth && !hovered {
+				fg = t.TabTextColor
 			}
 
 			text := fmt.Sprintf("%d", d.Day())

@@ -97,30 +97,37 @@ func emitNode(b *strings.Builder, n *Node, indent int) {
 // the type name in decl.New) and the first attr needs a leading ", ".
 func emitAttrs(b *strings.Builder, n *Node, indent int, needLeadingComma bool) {
 	first := !needLeadingComma
+	multiline := len(n.Children) > 0 || len(n.Props) > 2
+	before := func() {
+		if !first {
+			b.WriteByte(',')
+		}
+		if multiline {
+			b.WriteByte('\n')
+			b.WriteString(strings.Repeat("\t", indent+1))
+		} else if !first {
+			b.WriteByte(' ')
+		}
+		first = false
+	}
 
 	if n.ID != "" {
-		if !first {
-			b.WriteString(`, `)
-		}
+		before()
 		b.WriteString(`decl.ID(`)
 		b.WriteString(strconv.Quote(n.ID))
 		b.WriteString(`)`)
-		first = false
 	}
-
 	for _, p := range n.Props {
-		if !first {
-			b.WriteString(`, `)
-		}
+		before()
 		emitProp(b, p)
-		first = false
 	}
-
 	if len(n.Children) > 0 {
-		if !first {
-			b.WriteString(`, `)
-		}
-		emitChildren(b, n.Children, indent)
+		before()
+		emitChildren(b, n.Children, indent+1)
+	}
+	if multiline {
+		b.WriteString(",\n")
+		b.WriteString(strings.Repeat("\t", indent))
 	}
 }
 
@@ -148,6 +155,19 @@ func emitValue(b *strings.Builder, v Value) {
 		switch lv := x.V.(type) {
 		case string:
 			b.WriteString(strconv.Quote(lv))
+		case []string:
+			if lv == nil {
+				b.WriteString("[]string(nil)")
+				break
+			}
+			b.WriteString("[]string{")
+			for i, item := range lv {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(strconv.Quote(item))
+			}
+			b.WriteString("}")
 		case bool:
 			if lv {
 				b.WriteString(`true`)
@@ -159,6 +179,10 @@ func emitValue(b *strings.Builder, v Value) {
 		default:
 			b.WriteString(fmt.Sprint(lv))
 		}
+	case Persisted:
+		b.WriteString(`decl.Persisted{Source: `)
+		b.WriteString(strconv.Quote(x.Source))
+		b.WriteString(`}`)
 	case Ref:
 		b.WriteString(`decl.Ref{Name: `)
 		b.WriteString(strconv.Quote(x.Name))

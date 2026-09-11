@@ -24,10 +24,8 @@ const interfaceGoType = "gui.IWidget"
 // simpleAddContainers are factory names whose Go type exposes a
 // single-argument AddWidget(iw) — so codegen can place a nested child
 // with `ui.parent.AddWidget(ui.child)` and let the container own its
-// arrangement. GridLayout (needs row/col) and FormLayout (needs a row
-// label) are intentionally excluded: the designer doesn't yet track
-// the extra placement args, so children of those fall back to
-// SetParent + absolute SetBounds.
+// arrangement. GridLayout/FormLayout use AddLayoutWidget with explicit
+// row/column/span metadata instead; other parents use local SetBounds.
 var simpleAddContainers = map[string]bool{
 	"gui.VBox":     true,
 	"gui.HBox":     true,
@@ -256,8 +254,9 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 				imports["github.com/uk0/silk/core"] = true
 			}
 
-			x := roundPx(fake.X())
-			y := roundPx(fake.Y())
+			localX, localY := runtimePosition(fake)
+			x := roundPx(localX)
+			y := roundPx(localY)
 			w := roundPx(fake.Width())
 			h := roundPx(fake.Height())
 
@@ -294,7 +293,7 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			})
 
 			if fake.HasChildren() {
-				collect(fake.Children(), fieldName, isSimpleAddContainer(factoryName))
+				collect(fake.Children(), fieldName, isSimpleAddContainer(factoryName) && (!isDesignerLayoutFactory(factoryName) || fake.layoutManaged))
 			}
 		}
 	}
@@ -377,12 +376,18 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 	// Children
 	for _, f := range fields {
 		buf.WriteString(fmt.Sprintf("\tui.%s = %s\n", f.name, f.constructor))
+		if isDesignerLayoutFactory(f.factoryName) {
+			fmt.Fprintf(&buf, "\tui.%s.SetLayoutEnabled(%t)\n", f.name, f.fake.layoutManaged)
+		}
 		switch {
 		case f.parentField == "":
 			// Top-level widget: parent to the form at absolute bounds.
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.Form)\n", f.name))
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
+		case f.parentField != "" && isGridOrFormParent(f.fake) && f.fake.Parent().(*FakeWidget).layoutManaged:
+			p := placementForChild(f.fake)
+			fmt.Fprintf(&buf, "\tui.%s.AddLayoutWidget(ui.%s, %d, %d, %d, %d)\n", f.parentField, f.name, p.Row, p.Column, p.RowSpan, p.ColumnSpan)
 		case f.parentAdd:
 			// Nested in a simple-AddWidget container (VBox/HBox/Card/
 			// GroupBox): AddWidget reparents AND lets the container
@@ -466,6 +471,18 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 	// range, unit, …) so the generated screen looks like the design.
 	for _, f := range fields {
 		emitDesignProperties(&buf, imports, f.factoryName, f.name, f.widget)
+	}
+
+	for _, f := range fields {
+		emitLayoutProperties(&buf, f)
+	}
+	// Final layout pass follows all child creation and scalar property setters.
+	// Reverse order lets nested size hints settle before their parents arrange.
+	for i := len(fields) - 1; i >= 0; i-- {
+		f := fields[i]
+		if isDesignerLayoutFactory(f.factoryName) {
+			fmt.Fprintf(&buf, "\tui.%s.Layout()\n", f.name)
+		}
 	}
 
 	// Tag bindings: wire each industrial widget whose design-time "tag"
@@ -789,7 +806,7 @@ func sanitizeIdentifier(s string) string {
 // roundPx converts mm scene coordinates to pixel values,
 // using a standard 96 DPI conversion (1mm ≈ 3.78px).
 func roundPx(mm float64) float64 {
-	return math.Round(mm * 3.78) // 96 DPI: 25.4mm per inch, 96px per inch
+	return math.Round(mm * 96 / 25.4) // 96 DPI: 25.4mm per inch, 96px per inch
 }
 
 // fmtFloat formats a float64 for code output: integers print without decimal.

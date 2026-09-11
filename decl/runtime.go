@@ -2,6 +2,9 @@ package decl
 
 import (
 	"fmt"
+	"math"
+	"reflect"
+	"strconv"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/i18n"
@@ -71,15 +74,20 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("decl.Build: factory %q returned nil", n.Type)
 	}
 
+	handled := applyCompoundProperties(obj, n.Props)
 	for _, p := range n.Props {
-		applyProp(obj, p)
+		if !handled[p.Name] {
+			applyProp(obj, p)
+		}
 	}
+
+	applyGeometry(obj, n)
 
 	if n.ID != "" {
 		idx[n.ID] = obj
 	}
 
-	for _, c := range n.Children {
+	for childIndex, c := range n.Children {
 		if c == nil {
 			continue
 		}
@@ -92,9 +100,14 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 		// in attach.go. Inlined check kept simple: only attach when
 		// the child exposes a SetParent that accepts an interface{}
 		// or our concrete obj.
-		attachChild(obj, child)
+		if !attachLayoutChild(obj, child, n.Type, c, childIndex) {
+			attachChild(obj, child)
+		}
 	}
 
+	if layout, ok := obj.(interface{ Layout() }); ok {
+		layout.Layout()
+	}
 	return obj, nil
 }
 
@@ -115,6 +128,9 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 func applyProp(obj interface{}, p Prop) {
 	var lit Lit
 	switch v := p.Value.(type) {
+	case Persisted:
+		applyPersistedProperty(obj, p.Name, v.Source)
+		return
 	case Lit:
 		lit = v
 	case TrKey:
@@ -125,30 +141,82 @@ func applyProp(obj interface{}, p Prop) {
 		return
 	}
 	switch p.Name {
+	case "selectedIndex", "activeIndex":
+		if setter, ok := obj.(interface{ SetActiveIndex(int) }); ok {
+			if value, ok := asFloat(lit.V); ok && math.Trunc(value) == value && value >= -math.Ldexp(1, strconv.IntSize-1) && value < math.Ldexp(1, strconv.IntSize-1) {
+				setter.SetActiveIndex(int(value))
+				return
+			}
+		}
+	case "layout_enabled":
+		if enabled, ok := asBool(lit.V); ok {
+			if manager, ok := obj.(interface{ SetLayoutEnabled(bool) }); ok {
+				manager.SetLayoutEnabled(enabled)
+				return
+			}
+		}
 	case "text", "Text":
 		if s, ok := lit.V.(string); ok {
 			if tw, ok := obj.(textSetter); ok {
 				tw.SetText(s)
+				return
 			}
 		}
 	case "title", "Title":
 		if s, ok := lit.V.(string); ok {
 			if tw, ok := obj.(titleSetter); ok {
 				tw.SetTitle(s)
+				return
 			}
 		}
 	case "checked", "Checked":
 		if b, ok := asBool(lit.V); ok {
 			if cw, ok := obj.(checkedSetter); ok {
 				cw.SetChecked(b)
+				return
 			}
 		}
 	case "value", "Value":
 		if f, ok := asFloat(lit.V); ok {
 			if vw, ok := obj.(valueSetter); ok {
 				vw.SetValue(f)
+				return
 			}
 		}
+	}
+	applyLiteralProperty(obj, p.Name, lit.V)
+}
+
+// applyGeometry updates all four coordinates together, preserving factory
+// defaults for omitted dimensions. Repeated SetWidth/SetHeight calls can
+// trigger intermediate layout and lose the intended bounds.
+func applyGeometry(obj interface{}, n *Node) {
+	w, ok := obj.(interface {
+		Bounds() (float64, float64, float64, float64)
+		SetBounds(float64, float64, float64, float64)
+	})
+	if !ok {
+		return
+	}
+	x, y, width, height := w.Bounds()
+	changed := false
+	for _, p := range []struct {
+		name string
+		dst  *float64
+	}{{"x", &x}, {"y", &y}, {"width", &width}, {"height", &height}} {
+		v, exists := n.PropValue(p.name)
+		lit, literal := v.(Lit)
+		if !exists || !literal {
+			continue
+		}
+		value, valid := asFloat(lit.V)
+		if !valid || math.IsNaN(value) || math.IsInf(value, 0) || ((p.name == "width" || p.name == "height") && value < 0) {
+			continue
+		}
+		*p.dst, changed = value, true
+	}
+	if changed {
+		w.SetBounds(x, y, width, height)
 	}
 }
 
@@ -174,20 +242,26 @@ func asBool(v interface{}) (bool, bool) {
 }
 
 func asFloat(v interface{}) (float64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return x, true
-	case float32:
-		return float64(x), true
-	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
-	case string:
-		var f float64
-		if _, err := core.PersistSscan(x, &f); err == nil {
-			return f, true
-		}
+	if v == nil {
+		return 0, false
 	}
-	return 0, false
+	var number float64
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Float32, reflect.Float64:
+		number = rv.Float()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		number = float64(rv.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		number = float64(rv.Uint())
+	case reflect.String:
+		var err error
+		number, err = strconv.ParseFloat(rv.String(), 64)
+		if err != nil {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	return number, !math.IsNaN(number) && !math.IsInf(number, 0)
 }

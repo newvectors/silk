@@ -73,6 +73,7 @@ func TryContextMenu(widget IWidget, x, y float64) bool {
 // calls the builder to populate it, then shows it as a popup.
 func ShowContextMenu(widget IWidget, x, y float64, builder func(menu *Menu)) {
 	menu := NewPopupMenu()
+	menu.SetParent(widget)
 	builder(menu)
 
 	// Only show if builder added items

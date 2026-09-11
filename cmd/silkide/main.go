@@ -1,32 +1,4 @@
-// silkide is a reference implementation of the JetBrains-style IDE
-// layout for the silk framework. It demonstrates how the existing
-// silk widgets (Frame, ToolBar, Splitter, TabWidget, FileExplorer,
-// CodeEditor, StatusBar) compose into the four-zone IDE shell shown
-// in the project's design mockup:
-//
-//	┌──────────────────────────────────────────────┐
-//	│ ☰ 📁 ↻ 💾 ← →    title    ▶ 🐛 🔍 ⚙        │  ← top toolbar
-//	├──┬──────────┬───────────────────────────────┤
-//	│📁│myproject │ main.go [×] | server.go [×]  │  ← left strip + editor tabs
-//	│🌿│ ▼ cmd    ├───────────────────────────────┤
-//	│🏗│   main.go│ package main                  │
-//	│ │ ▼ pkg    │ ...                           │  ← editor body
-//	│⚙│  go.mod  ├───────────────────────────────┤
-//	│>_│         │ Terminal      Output          │
-//	│⚠│          │ ...                           │
-//	├──┴──────────┴───────────────────────────────┤
-//	│ myproject | main | Ln 8 Col 12 | UTF-8 …  │  ← status bar
-//	└──────────────────────────────────────────────┘
-//
-// Run with `go run ./cmd/silkide`. The binary opens a sample workspace
-// rooted at the current directory; clicking any file in the tree
-// opens it in the editor.
-//
-// This is a demonstration / reference layout — wire-up work like
-// run/debug/build hooks live in the parent silk designer (design.go);
-// silkide stays focused on the chrome shape so the layout can be
-// reviewed and copy-paste-extended without breaking the working
-// designer.
+// silkide integrates Go editing, visual UI design, builds and debugging.
 package main
 
 import (
@@ -50,6 +22,7 @@ import (
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hotreload"
 	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/internal/silkgen"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/pdfexport"
 	"github.com/uk0/silk/prop"
@@ -57,6 +30,7 @@ import (
 )
 
 func main() {
+	paint.SetPreferVectorIcons(true)
 	// Compatibility note: ged widgets (WidgetList / GedView /
 	// ObjectInspector) currently have rendering issues under the
 	// silk_no_cairo build tag — text is left-clipped, the design
@@ -100,6 +74,7 @@ func main() {
 	// through to GedScene.OpenFile / Save without the global plumbing
 	// SuggestDocDock would otherwise force.
 	editorTabs, designCanvas := buildPanels(frame)
+	wireDesignerContextPanels(designCanvas)
 	// Bridge core's log stream into the bottom-dock Log panel now that
 	// buildPanels has constructed it — registered before the background
 	// refreshes below kick off so their core.Warn failures land in the
@@ -126,10 +101,10 @@ func main() {
 		rebindAutoSaver(designCanvas.GedScene())
 	}
 
-	// Live preview: Ctrl+R on the design canvas runs the current screen against a
+	// Live preview: the toolbar, Command Palette and Cmd/Ctrl+Shift+R run the screen against a
 	// throwaway in-memory scada.Services (drivers off, notifications silenced) and
 	// shows it in its own window. The controller tears the previous preview down
-	// before starting a new one, so repeated Ctrl+R never leaks a Services or the
+	// before starting a new one, so repeated previews never leak a Services or the
 	// goroutines it starts. The closure holds the controller for the process life.
 	if designCanvas != nil {
 		previewHost := newPreviewController()
@@ -226,6 +201,20 @@ func startTitleSync(frame *gui.Frame, canvas *ged.GedView) {
 	last := ""
 	titleSyncTimer.Start(500, func() {
 		title := composeTitle(canvas)
+		if w := globalWorkbench; w != nil && w.canvas == canvas {
+			w.syncMode()
+			if documentMode(w.tabs, canvas) == modeEdit {
+				if ed := activeEditor(w.tabs); ed != nil {
+					path := activeEditorPath(w.tabs)
+					refreshEditorTab(w.tabs, ed, path)
+					title = filepath.Base(path)
+					if ed.Modified() {
+						title += " *"
+					}
+					title += " — " + idTitle()
+				}
+			}
+		}
 		if title == last {
 			return
 		}
@@ -292,6 +281,8 @@ func composeTitle(canvas *ged.GedView) string {
 // opens in a code editor tab.
 func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	tb := gui.NewToolBar()
+	tb.SetSpacing(4)
+	addWorkspaceActions(tb)
 
 	// addIconAction wraps tb.AddAction + gui.SetToolTip so every
 	// icon-only button announces what it does on hover. Tooltip text
@@ -299,6 +290,9 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// "Save", matching the i18n contract for the rest of the IDE
 	// chrome.
 	addIconAction := func(label, iconName, tipKey string, cb func()) {
+		if label == "" {
+			label = i18n.T(tipKey)
+		}
 		btn := tb.AddAction(label, paint.LoadIcon(iconName), cb)
 		if btn != nil && tipKey != "" {
 			gui.SetToolTip(btn, i18n.T(tipKey))
@@ -313,7 +307,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// Empty initial callback then re-bind: lets us reference the
 	// returned *Button from inside the closure (used as the popup
 	// anchor point).
-	hamburger := tb.AddAction("", paint.LoadIcon("menu"), func() {})
+	hamburger := tb.AddAction(i18n.T("Menu"), paint.LoadIcon("menu"), func() {})
 	if hamburger != nil {
 		gui.SetToolTip(hamburger, i18n.T("Menu"))
 		hamburger.Action().BindFunc0(func() {
@@ -351,49 +345,17 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		}
 	})
 	addIconAction("", "save", "Save", func() {
-		// Save the current design canvas as .silkui. performSave covers
-		// the SaveFileDialog popup (filenameless scenes), the .silk.go
-		// regen on success, and the success toast. The dirty-discard
-		// flow has its own save path so it doesn't double-toast.
-		performSave(designCanvas)
+		saveCurrentDocument(editorTabs, designCanvas)
 	})
 	tb.AddSeparator()
 
-	// Navigation. Mock-up shows back / forward arrows; we re-use the
-	// undo / redo glyphs which carry the same left / right semantics
-	// in most icon sets.
-	addIconAction("", "edit-undo", "Undo", func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanUndo() {
-				stack.Undo()
-				designCanvas.Update()
-			}
-		}
-	})
-	addIconAction("", "edit-redo", "Redo", func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanRedo() {
-				stack.Redo()
-				designCanvas.Update()
-			}
-		}
-	})
+	// Document history always follows the visible editor or designer.
+	addIconAction("", "edit-undo", "Undo", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
+	addIconAction("", "edit-redo", "Redo", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
 	tb.AddSeparator()
 
-	// Run / Build / Debug / Stop / Preview / PropSheet. run.png and
-	// preview.png exist natively; build/debug/stop resolve at runtime
-	// via paint.LoadIcon by semantic name, so the toolbar shows the
-	// real glyph once that art lands and degrades to the existing
-	// fallback until then. Tooltips include the keyboard shortcut so
-	// users can discover F5/F6 from the hover affordance,
-	// JetBrains-style.
-	if btn := tb.AddAction("", paint.LoadIcon("run"), func() { runProjectInTerminal(designCanvas) }); btn != nil {
+	// Project execution actions; tooltips advertise their keyboard shortcuts.
+	if btn := tb.AddAction(i18n.T("Run"), paint.LoadIcon("run"), func() { runProjectInTerminal(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Run")+" (F5)")
 	}
 	if btn := tb.AddAction(i18n.T("Build"), paint.LoadIcon("build"), func() { buildProject(designCanvas) }); btn != nil {
@@ -402,28 +364,16 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	if btn := tb.AddAction(i18n.T("Debug"), paint.LoadIcon("debug"), func() { runProjectInDebugger(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Debug")+" (Shift+F5)")
 	}
-	if btn := tb.AddAction(i18n.T("Stop"), paint.LoadIcon("stop"), func() { stopDebugger() }); btn != nil {
+	if btn := tb.AddAction(i18n.T("Stop"), paint.LoadIcon("stop"), func() { stopProjectExecution() }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Stop"))
 	}
 	tb.AddSeparator()
-	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
-	// extension to silk/svgexport or silk/pdfexport, draws the active
-	// design canvas via scene.DrawAll(painter), writes the resulting
-	// document to the chosen path. Restores the missing
-	// "designer scene → SVG/PDF" path that cairo_*_surface used to
-	// provide before the Cairo removal effort split out export
-	// surfaces into pure-Go packages.
-	addIconAction("", "preview", "Export...", func() {
-		if designCanvas == nil {
-			return
-		}
-		path := gui.SaveFileDialog()
-		if path == "" {
-			return
-		}
-		if err := exportDesignCanvas(path, designCanvas); err != nil {
-			core.Warn("export failed: ", err)
-		}
+	if button := tb.AddAction(i18n.T("Preview"), paint.LoadIcon("preview"), func() { previewDesign(designCanvas) }); button != nil {
+		gui.SetToolTip(button, i18n.T("Preview")+" ("+actionKeyHint()+"+Shift+R)")
+	}
+	// Export is separate from live preview and writes the scene as SVG/PDF.
+	addIconAction("", "document", "Export...", func() {
+		performExport(designCanvas)
 	})
 	// Focus the right-dock property sheet (Project Settings still lives in
 	// the hamburger menu). The propsheet glyph now matches its target: it
@@ -434,6 +384,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	})
 
 	frame.SetToolBar(tb)
+	buildDesignToolBar(frame, designCanvas)
 }
 
 // exportDesignCanvas renders the design canvas's scene to the file at
@@ -442,6 +393,9 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 // implementations satisfy paint.Painter, so scene.DrawAll() drives the
 // export the same way it drives the live screen render.
 func exportDesignCanvas(path string, designCanvas *ged.GedView) error {
+	if designCanvas == nil {
+		return fmt.Errorf("design canvas is unavailable")
+	}
 	scene := designCanvas.GedScene()
 	if scene == nil {
 		return fmt.Errorf("design canvas has no scene")
@@ -512,6 +466,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	// handlers via Init, so just adding the view is enough.
 	designCanvas := ged.NewGedView()
 	dock.AddView(designCanvas)
+	w := &workbench{frame: frame, center: dock, tabs: editorTabs, canvas: designCanvas}
+	globalWorkbench = w
 
 	// Welcome screen — third sibling tab. Mirrors Qt Creator's start
 	// page: title, recent projects, New / Open buttons. The user
@@ -520,6 +476,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	// Open dispatches through the same handlers the toolbar uses.
 	if globalPrefs != nil {
 		welcome := ged.NewWelcomeScreen()
+		w.welcome = welcome
 		welcome.SetRecentFiles(globalPrefs.RecentFiles())
 		welcome.SetNewProjectCallback(func() {
 			newDesignCanvas(designCanvas)
@@ -561,6 +518,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// drag-source protocol and GedView implements the matching
 		// drop target (OnDragEnter / OnDragMove / OnDrop).
 		widgetList := ged.NewWidgetList()
+		w.palette = widgetList
 		leftDock.AddView(widgetList)
 
 		// Global search panel — VSCode-style search-across-files. The
@@ -594,6 +552,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		leftDock.AddView(globalPackages)
 
 		globalLeftDock = leftDock
+		leftDock.ParentBrick().SetSplit(0.19)
+		dockSetActiveView(leftDock, fileExplorer)
 	}
 
 	// Right dock: property inspector. Conventional IDE layout (Qt
@@ -652,6 +612,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// active tab to the outline without threading the dock reference
 		// through the shortcut wiring (mirrors globalLeftDock).
 		globalRightDock = rightDock
+		rightDock.ParentBrick().SetSplit(0.77)
 
 		// Cross-file bookmarks — sibling tab of Inspector + Outline in
 		// the right dock. The right dock is the natural home for nav
@@ -897,6 +858,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		bottomDock.AddView(globalGitLog)
 
 		globalBottomDock = bottomDock
+		bottomDock.ParentBrick().SetSplit(0.74)
+		dockSetActiveView(bottomDock, globalBuildOutput)
 		globalCanvas = designCanvas
 	}
 
@@ -917,6 +880,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		})
 	}
 
+	w.syncMode()
 	return editorTabs, designCanvas
 }
 
@@ -930,17 +894,10 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 // + 2 editable rows have room without scrolling.
 func showProjectSettingsDialog(parent gui.IWidget) {
 	if parent == nil {
-		return
+		parent = globalFrame
 	}
-	dlg := gui.NewDialog(i18n.T("Project Settings"), parent)
-	panel := ged.NewProjectSettingsPanel()
-	panel.Refresh()
-	box := gui.NewVBox()
-	box.SetSpacing(0)
-	box.AddWidget(panel)
-	dlg.SetContent(box)
-	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
-	dlg.SetSize(560, 420)
+	canvas, _ := parent.(*ged.GedView)
+	dlg, _ := buildProjectSettingsDialog(parent, projectDir(canvas))
 	dlg.ShowModal()
 }
 
@@ -961,15 +918,11 @@ func dockSetActiveView(d *gui.Dock, view gui.IWidget) {
 // holds a CodeEditor; closing tabs from the X button cycles to the
 // next tab automatically (TabWidget native behaviour).
 //
-// Pre-seeded with three sample tabs so the layout matches the
-// mockup the moment the binary starts. Real callers replace this
-// with FileExplorer.SigFileOpen → tab open wiring (see
-// openFileInEditor below).
+// Start empty: sample buffers looked like real files but could not be saved.
+// The welcome page and restored documents provide the initial workspace.
 func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	tabs := gui.NewTabWidget()
-	tabs.AddTab(makeCodeEditor(sampleMainGo()), "main.go", paint.LoadIcon("document"))
-	tabs.AddTab(makeCodeEditor(sampleServerGo()), "server.go", paint.LoadIcon("document"))
-	tabs.AddTab(makeCodeEditor(sampleGoMod()), "go.mod", paint.LoadIcon("document"))
+	tabs.SetTitle(i18n.T("Edit"))
 	// Wire the tab X button (it was a no-op): remove the tab and untrack its
 	// editor from openEditors so the file reopens cleanly and LSP/diff state
 	// doesn't leak the closed buffer. Synchronous removal is safe — TabBar's
@@ -1008,8 +961,6 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 			}
 		}
 	}
-	// The three sample-seed tabs have no path; nothing on disk to compare
-	// against, so they close as they always did.
 	if ed != nil && path != "" && editorDiffersFromDisk(ed, path) {
 		switch askDirty(func() gui.DialogResult { return askCloseDirtyEditor(ed, path) }) {
 		case gui.DialogOK:
@@ -1200,8 +1151,8 @@ func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
 	frame.SetCanCloseCallback(func(*gui.Frame) bool { return canQuit(canvas) })
 }
 
-// installClosedPersist hangs the end-of-session writes off the frame's closed
-// callback: the state the next launch replays, then the end of the event loop.
+// installClosedPersist captures the session before frame teardown and ends the
+// event loop after the frame has closed.
 // Every quit gesture reaches it, since both of them go out through Frame.Close.
 //
 // Named rather than written inline in main() for the same reason
@@ -1210,10 +1161,10 @@ func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
 // on passing while this one loses the canvas — and with it the open design —
 // or the persist call entirely.
 func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferences) {
-	frame.SetClosedCallback(func(*gui.Frame) {
-		persistSessionState(frame, canvas, prefs)
-		quitApp()
-	})
+	// Capture before CloseAllViews detaches the active dock/tab; afterwards
+	// documentMode can no longer distinguish design from a hidden editor.
+	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
+	frame.SetClosedCallback(func(*gui.Frame) { quitApp() })
 }
 
 // lspDidCloseFile notifies gopls a document closed and drops its client-side
@@ -1578,7 +1529,7 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	statusBarBuildLabel = gui.NewLabel("")
 	sb.AddPermanentWidget(statusBarBuildLabel)
 
-	sb.AddPermanentWidget(gui.NewLabel("v0.1.3"))
+	sb.AddPermanentWidget(gui.NewLabel("v" + ideVersion))
 
 	frame.SetStatusBar(sb)
 	return sb
@@ -1671,14 +1622,13 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		// Recovery prompt: if a sibling .autosave is newer than the
 		// .silkui the user is trying to open, offer to load it
 		// instead. Picks up where a crash or sudden quit left off.
-		recovered := false
-		if recovery := ged.CheckRecovery(path); recovery != "" {
-			if confirmRecoverFromAutosave(canvas, path, recovery) {
-				path = recovery
-				recovered = true
-			}
+		recoveryPath := ""
+		if recovery := ged.CheckRecovery(path); recovery != "" && confirmRecoverFromAutosave(canvas, path, recovery) {
+			recoveryPath = recovery
 		}
-		if err := canvas.GedScene().OpenFile(path); err == nil {
+		recovered := recoveryPath != ""
+		if err := openDesignDocument(canvas.GedScene(), path, recoveryPath); err == nil {
+			showDesignWorkspace(canvas)
 			rebindAutoSaver(canvas.GedScene())
 			recordRecentFile(path)
 			watchForReload(canvas, path)
@@ -1848,71 +1798,7 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 	if anchor == nil {
 		return
 	}
-	menu := gui.NewPopupMenu()
-
-	// File actions — same handlers as the toolbar / Cmd shortcuts
-	// so all three entry points end up in the same code path.
-	menu.AddButton1(i18n.T("New"), nil).Action().BindFunc0(func() {
-		newDesignCanvas(designCanvas)
-	})
-	menu.AddButton1(i18n.T("Open"), nil).Action().BindFunc0(func() {
-		path := gui.OpenFileDialog()
-		if path == "" {
-			return
-		}
-		openFromTree(path, editorTabs, designCanvas, nil)
-	})
-
-	// "Open Recent" submenu — Qt Creator-style MRU surfaced as a
-	// nested menu so the top level stays short. Each entry opens that
-	// file through the same openFromTree path the toolbar / tree use;
-	// a disabled "(empty)" placeholder shows when nothing's been
-	// opened yet so the submenu never dangles with no rows.
-	recentSub := gui.NewPopupMenu()
-	var recent []string
-	if globalPrefs != nil {
-		recent = globalPrefs.RecentFiles()
-	}
-	if len(recent) == 0 {
-		empty := recentSub.AddButton1(i18n.T("(empty)"), nil)
-		empty.SetEnabled(false)
-	} else {
-		for _, path := range recent {
-			p := path // capture per-iteration
-			btn := recentSub.AddButton1(filepath.Base(p), nil)
-			gui.SetToolTip(btn, p)
-			btn.Action().BindFunc0(func() {
-				openFromTree(p, editorTabs, designCanvas, nil)
-			})
-		}
-	}
-	menu.AddSubMenu(i18n.T("Open Recent"), nil, recentSub)
-
-	menu.AddButton1(i18n.T("Save"), nil).Action().BindFunc0(func() {
-		// Same Save action as the toolbar / Cmd+S — performSave keeps
-		// the regen + success toast consistent across entry points.
-		performSave(designCanvas)
-	})
-
-	// "Dump a11y tree" — surfaces the cherry-picked silk/a11y package
-	// inside the IDE. Useful for verifying that custom widgets expose
-	// sane Roles to screen readers, or for snapshotting the visual
-	// hierarchy in a bug report. Output goes to stderr.
-	menu.AddSeparator()
-	menu.AddButton1(i18n.T("Dump A11y Tree"), nil).Action().BindFunc0(func() {
-		dumpA11yTree()
-	})
-	menu.AddButton1(i18n.T("Project Settings"), nil).Action().BindFunc0(func() {
-		showProjectSettingsDialog(designCanvas)
-	})
-
-	// "About" entry — shows the version banner + runtime info via
-	// ged.ShowAboutDialog. Standard "main app menu → About" surface
-	// every IDE has.
-	menu.AddSeparator()
-	menu.AddButton1(i18n.T("About"), nil).Action().BindFunc0(func() {
-		ged.ShowAboutDialog(designCanvas)
-	})
+	menu := buildHamburgerMenu(anchor, editorTabs, designCanvas)
 
 	xg, yg := anchor.MapToGlobal(0, 0)
 	_, h := anchor.Size()
@@ -1927,15 +1813,22 @@ func dumpA11yTree() {
 	root := gui.DefaultFrame()
 	if root == nil {
 		fmt.Fprintln(os.Stderr, "a11y: no DefaultFrame")
+		silkideToast(i18n.T("Accessibility tree unavailable"), gui.ToastWarning)
 		return
 	}
 	tree := a11y.Walk(root)
 	if tree == nil {
 		fmt.Fprintln(os.Stderr, "a11y: nil tree (root not visible)")
+		silkideToast(i18n.T("Accessibility tree unavailable"), gui.ToastWarning)
 		return
 	}
-	fmt.Fprintln(os.Stderr, "a11y tree:")
-	dumpA11yNode(tree, 0)
+	var out strings.Builder
+	fmt.Fprintln(&out, "a11y tree:")
+	dumpA11yNodeTo(&out, tree, 0)
+	fmt.Fprint(os.Stderr, out.String())
+	reportBuildOutput(out.String())
+	dockSetActiveView(globalBottomDock, globalBuildOutput)
+	silkideToast(i18n.T("Accessibility tree shown in Output"), gui.ToastInfo)
 }
 
 // dumpA11yNode renders an a11y.Node as an indented tree on stderr.
@@ -1943,6 +1836,10 @@ func dumpA11yTree() {
 // to keep the dump readable; callers needing every field should walk
 // the tree directly.
 func dumpA11yNode(n *a11y.Node, depth int) {
+	dumpA11yNodeTo(os.Stderr, n, depth)
+}
+
+func dumpA11yNodeTo(out io.Writer, n *a11y.Node, depth int) {
 	if n == nil {
 		return
 	}
@@ -1951,9 +1848,9 @@ func dumpA11yNode(n *a11y.Node, depth int) {
 	if name == "" {
 		name = "(unnamed)"
 	}
-	fmt.Fprintf(os.Stderr, "%s%s %s\n", indent, n.Role, name)
+	fmt.Fprintf(out, "%s%s %s\n", indent, n.Role, name)
 	for _, c := range n.Children {
-		dumpA11yNode(c, depth+1)
+		dumpA11yNodeTo(out, c, depth+1)
 	}
 }
 
@@ -1983,25 +1880,15 @@ func regenerateGoForSilkui(silkuiPath string) {
 		core.Warn("silkgen: parse ", silkuiPath, ": ", err)
 		return
 	}
-	body := decl.ToGo(tree)
 	stem := strings.TrimSuffix(filepath.Base(silkuiPath), ".silkui")
-	funcName := "Build" + capitalise(stem)
-	src := fmt.Sprintf(`// Code generated by silkide — DO NOT EDIT.
-// Source: %s
-
-package ui
-
-import "github.com/uk0/silk/decl"
-
-// %s constructs the widget tree decoded from %s. Pair with
-// (*decl.Node).Build() at runtime to materialise the actual widgets.
-func %s() *decl.Node {
-	return %s
-}
-`, filepath.Base(silkuiPath), funcName, filepath.Base(silkuiPath), funcName, body)
-
+	formatted, err := silkgen.GenerateSource(silkuiPath, "ui", "", tree)
+	if err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen generate failed: %v", silkuiPath, err))
+		core.Warn("silkgen: generate ", silkuiPath, ": ", err)
+		return
+	}
 	outPath := filepath.Join(filepath.Dir(silkuiPath), stem+".silk.go")
-	if err := os.WriteFile(outPath, []byte(src), 0o644); err != nil {
+	if err := os.WriteFile(outPath, formatted, 0o644); err != nil {
 		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen write failed: %v", outPath, err))
 		core.Warn("silkgen: write ", outPath, ": ", err)
 		return
@@ -2166,18 +2053,21 @@ func splitRunArgs(s string) []string {
 	return out
 }
 
-// renameSymbolAtActiveEditor pops a rename-input dialog seeded with the
-// identifier under the active editor's cursor and applies the new name
-// across the file via the editor's RenameSymbolAtCursor method. The
-// rename method lives in gui.CodeEditor (added in a parallel agent's
-// work on gui/codeeditor.go). We address it through a runtime interface
-// assertion so silkide still builds before that change merges; on a
-// build where the editor doesn't satisfy the interface yet the dialog
-// pops, the user types, submit, and gets a "not available" toast — no
-// crash, no silent swallow.
+// The IDE rename command is semantic/workspace-wide, whichever UI entry
+// invokes it. Missing LSP must be reported before opening the input dialog,
+// never disguised as a successful single-buffer textual replacement.
 func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
+	if globalLSP == nil {
+		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		return
+	}
 	ed := activeEditor(tabs)
 	if ed == nil {
+		return
+	}
+	path := activeEditorPath(tabs)
+	if !isGoFile(path) {
+		silkideToast(i18n.T("Rename Symbol not available"), gui.ToastWarning)
 		return
 	}
 	// Prefill: silk's CodeEditor doesn't currently expose a public
@@ -2198,31 +2088,7 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 	if newName == "" {
 		return
 	}
-	// Prefer gopls semantic rename (cross-file, type-aware) when LSP is up
-	// and this is a .go file; fall back to the editor's single-file text
-	// rename otherwise.
-	if path := activeEditorPath(tabs); globalLSP != nil && isGoFile(path) {
-		renameSymbolViaLSP(ed, path, newName)
-		return
-	}
-	// Runtime interface check: the parallel CodeEditor work adds
-	// RenameSymbolAtCursor(string) (string, int, error). Until that
-	// merges, the assertion fails and we toast a placeholder so the
-	// user knows the wiring is in place and the missing piece is in
-	// the editor, not the IDE.
-	renamer, ok := interface{}(ed).(interface {
-		RenameSymbolAtCursor(newName string) (oldName string, count int, err error)
-	})
-	if !ok {
-		silkideToast(i18n.T("Rename Symbol not available"), gui.ToastWarning)
-		return
-	}
-	oldName, count, err := renamer.RenameSymbolAtCursor(newName)
-	if err != nil {
-		silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError)
-		return
-	}
-	silkideToast(i18n.Tf("Renamed %s → %s (%d occurrences)", oldName, newName, count), gui.ToastSuccess)
+	renameSymbolViaLSP(ed, path, newName)
 }
 
 // renameSymbolViaLSP performs a workspace-wide semantic rename through
@@ -3227,12 +3093,6 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 	if strings.EqualFold(filepath.Ext(path), ".go") {
 		if formatted, err := gofmtSource(text); err == nil {
 			out = formatted
-			if formatted != text {
-				// ReplaceAllText (not SetText) so gofmt-on-save keeps undo +
-				// caret and fires SigChanged → gopls sees the formatted text
-				// (else diagnostics/hover desync until the next keystroke).
-				ed.ReplaceAllText(formatted)
-			}
 		} else {
 			silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
 		}
@@ -3240,6 +3100,15 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		silkideToast(i18n.Tf("Save failed: %v", err), gui.ToastError)
 		return false
+	}
+	if out != text {
+		ed.ReplaceAllText(out)
+	}
+	ed.MarkSaved()
+	if parent := ed.Parent(); parent != nil {
+		if tabs, ok := parent.Parent().(*gui.TabWidget); ok {
+			refreshEditorTab(tabs, ed, path)
+		}
 	}
 	silkideToast(i18n.Tf("Saved %s", filepath.Base(path)), gui.ToastSuccess)
 	// A successful save changes `git status` output; re-pull it so the
@@ -3251,8 +3120,8 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 }
 
 // projectDir resolves the directory the toolchain should run in:
-// the active .silkui's containing directory if one is open, else
-// the silkide process's cwd. Empty string means "fall back to the
+// the active design's nearest Go module, else its containing directory,
+// or the silkide process's cwd when there is no design. Empty string means "fall back to the
 // caller's existing cwd".
 func projectDir(canvas *ged.GedView) string {
 	// An explicit "Open Project" choice wins over everything else.
@@ -3262,7 +3131,7 @@ func projectDir(canvas *ged.GedView) string {
 	if canvas != nil {
 		if scene := canvas.GedScene(); scene != nil {
 			if fn := scene.Filename(); fn != "" {
-				return filepath.Dir(fn)
+				return enclosingGoProject(filepath.Dir(fn))
 			}
 		}
 	}
@@ -3270,6 +3139,24 @@ func projectDir(canvas *ged.GedView) string {
 		return cwd
 	}
 	return ""
+}
+
+// A form often lives in ui/ while main.go and go.mod live one level up.
+// Running from ui/ incorrectly reported "no main package" for a valid project.
+// Choose the nearest module (nested modules stay independent), never a go.mod
+// directory. An explicit project/run-directory override still takes priority.
+func enclosingGoProject(dir string) string {
+	if absolute, err := filepath.Abs(dir); err == nil {
+		dir = absolute
+	}
+	for candidate := dir; ; candidate = filepath.Dir(candidate) {
+		if info, err := os.Stat(filepath.Join(candidate, "go.mod")); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+		if filepath.Dir(candidate) == candidate {
+			return dir
+		}
+	}
 }
 
 // openProjectFolder re-roots silkide at a user-chosen project directory.
@@ -3282,7 +3169,7 @@ func openProjectFolder(canvas *ged.GedView) {
 	if picked == "" {
 		return
 	}
-	dir := filepath.Dir(picked)
+	dir := enclosingGoProject(filepath.Dir(picked))
 	globalProjectRoot = dir
 	if globalFileExplorer != nil {
 		globalFileExplorer.SetRootDir(dir)
@@ -3333,6 +3220,7 @@ func newDesignCanvas(canvas *ged.GedView) {
 		globalInspector.Rebuild()
 	}
 	rebindAutoSaver(scene)
+	showDesignWorkspace(canvas)
 	canvas.Update()
 }
 
@@ -3418,7 +3306,7 @@ func confirmDiscardDirty(canvas *ged.GedView) bool {
 		// Save() returns false when the user cancelled the
 		// SaveFileDialog or the write failed; in both cases we
 		// must not proceed and lose the work.
-		return scene.Save()
+		return saveDesignDocument(canvas)
 	case gui.DialogNo:
 		return true
 	default:
@@ -3441,8 +3329,8 @@ func startReloader(canvas *ged.GedView) {
 			// UI thread is drawing at that instant. Reading the scene inside
 			// the post also picks up a canvas the user retargeted meanwhile.
 			onUI(func() {
-				if scene := canvas.GedScene(); scene != nil {
-					_ = scene.OpenFile(path)
+				if _, err := reloadCleanDesign(canvas.GedScene(), path); err != nil {
+					core.Warn("hotreload: ", path, ": ", err)
 				}
 			})
 			return nil
@@ -3484,27 +3372,17 @@ func recordRecentFile(path string) {
 	globalPrefs.AddRecentFile(path)
 }
 
-// currentSessionPaths snapshots what's open right now so the next
-// launch can reopen it: the active design canvas's .silkui (if it has
-// a filename) followed by every open editor-tab path. The .silkui goes
-// first so restoreSession lands the user back on the design canvas the
-// same way openFromTree does for a .silkui. Editor paths come from the
-// openEditors map; iteration order isn't deterministic but the set is
-// what matters for restore. De-dup happens in existingPaths on the way
-// back in.
+// currentSessionPaths preserves design-first compatibility and visible editor
+// tab order for older path-only preference consumers.
 func currentSessionPaths(canvas *ged.GedView) []string {
-	var paths []string
-	if canvas != nil {
-		if scene := canvas.GedScene(); scene != nil {
-			if fn := scene.Filename(); fn != "" {
-				paths = append(paths, fn)
-			}
-		}
+	return captureWorkspaceSession(sessionEditorTabs(), canvas).paths()
+}
+
+func sessionEditorTabs() *gui.TabWidget {
+	if globalWorkbench != nil {
+		return globalWorkbench.tabs
 	}
-	for path := range openEditors {
-		paths = append(paths, path)
-	}
-	return paths
+	return centerEditorTabs()
 }
 
 // persistSessionState writes the state the next launch replays: the final
@@ -3525,7 +3403,7 @@ func persistSessionState(frame *gui.Frame, canvas *ged.GedView, prefs *preferenc
 	// (Qt Creator-style session restore). Mirrors the window-geometry
 	// save right above — both are last-known-good state captured on
 	// close and replayed at startup.
-	prefs.SetOpenSession(currentSessionPaths(canvas))
+	prefs.SetWorkspaceSession(captureWorkspaceSession(sessionEditorTabs(), canvas))
 }
 
 // restoreSession reopens the files persisted by SetOpenSession on the
@@ -3536,6 +3414,10 @@ func persistSessionState(frame *gui.Frame, canvas *ged.GedView, prefs *preferenc
 // nothing was saved.
 func restoreSession(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	if globalPrefs == nil {
+		return
+	}
+	if state, ok := globalPrefs.WorkspaceSession(); ok {
+		restoreWorkspaceSession(state, editorTabs, designCanvas)
 		return
 	}
 	for _, path := range existingPaths(globalPrefs.OpenSession()) {
@@ -3554,6 +3436,14 @@ var openEditors = map[string]*gui.CodeEditor{}
 // or focuses an existing one if the path is already open. Returns
 // true on success so the caller can record it in the MRU list.
 func openFileInEditor(tabs *gui.TabWidget, path string) bool {
+	if path == "" {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	path = filepath.Clean(absPath)
 	if tabs == nil {
 		return false
 	}
@@ -3570,8 +3460,10 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// the change gutter (added/modified/removed bars). Without this the
 	// gutter stays empty regardless of uncommitted changes.
 	ed.SetFilePath(path)
+	ed.MarkSaved()
 	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
+	configureEditorSymbolActions(tabs, ed)
 	// Coverage runs push into the tabs that are open at the time, so a file
 	// opened afterwards would show no stripes at all until the user ran the
 	// whole suite again. Same call, from the other side.
@@ -3581,6 +3473,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// (see lspOnEditorChanged) before the async fetch, so the column lines
 	// up with the edit that triggered it.
 	ed.SigChanged(func(text string) {
+		refreshEditorTab(tabs, ed, path)
 		lspOnEditorChanged(path, ed, text)
 	})
 	// LSP hover + signature help: the editor fires position events; silkide
@@ -3666,6 +3559,8 @@ func focusEditorTab(tabs *gui.TabWidget, ed *gui.CodeEditor) {
 	for i := 0; i < tabs.Count(); i++ {
 		if stack.Page(i) == gui.IWidget(ed) {
 			tabs.SetCurrentIndex(i)
+			showEditorWorkspace(tabs)
+			ed.SetFocus()
 			return
 		}
 	}
@@ -3892,6 +3787,10 @@ func runProjectInDebugger(canvas *ged.GedView) {
 		debugContinue()
 		return
 	}
+	if globalDebugAttempt != nil {
+		silkideToast(i18n.T("Debugger starting..."), gui.ToastInfo)
+		return
+	}
 	dir := projectDir(canvas)
 	var args []string
 	if globalPrefs != nil {
@@ -3902,54 +3801,19 @@ func runProjectInDebugger(canvas *ged.GedView) {
 	// (seconds for a cgo project) and each SetBreakpoint is a blocking RPC —
 	// doing them inline froze the toolbar until the build finished (or the old
 	// 3s dial budget expired and killed dlv). Publish globalDebug via gui.Post.
-	type bp struct {
-		path string
-		line int
-	}
-	var bps []bp
+	var bps []debugInitialBreakpoint
 	for path, ed := range openEditors {
 		if ed == nil {
 			continue
 		}
 		for _, line := range ed.Breakpoints() {
-			bps = append(bps, bp{path, line + 1}) // 0-based editor → 1-based dlv
+			bps = append(bps, debugInitialBreakpoint{path, line + 1}) // 0-based editor → 1-based dlv
 		}
 	}
 	silkideToast(i18n.T("Debugger starting..."), gui.ToastInfo)
-	go func() {
-		sess, err := core.LaunchDebug(dir, args)
-		if err != nil {
-			gui.Post(func() {
-				silkideToast(i18n.Tf("Debugger failed: %v", err), gui.ToastError)
-			})
-			return
-		}
-		for _, b := range bps {
-			if _, bpErr := sess.SetBreakpoint(b.path, b.line); bpErr != nil {
-				core.Warn("dlv: SetBreakpoint ", b.path, ":", b.line, ": ", bpErr)
-			}
-		}
-		// Publish on the main thread, but bail if the user already hit Stop.
-		gui.Post(func() {
-			if globalDebug != nil {
-				_ = sess.Close() // a session started meanwhile; don't leak this one
-				return
-			}
-			globalDebug = sess
-			silkideToast(i18n.T("Debugger started"), gui.ToastInfo)
-			logEvent(ged.LogInfo, "Debugger launched")
-		})
-		st, contErr := sess.Continue()
-		if contErr != nil {
-			if !errors.Is(contErr, core.ErrSessionClosed) {
-				gui.Post(func() {
-					silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
-				})
-			}
-			return
-		}
-		debugHandleStop(sess, st)
-	}()
+	a := &debugLaunchAttempt{hooks: debuggerHooks}
+	globalDebugAttempt = a
+	go a.launch(dir, args, bps)
 }
 
 // debugHandleStop pulls the call stack + locals after any dlv stop
@@ -3981,16 +3845,7 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 	}
 	if st.Reason == "exited" {
 		gui.Post(func() {
-			// Debuggee finished: tear the session down so Shift+F5 relaunches
-			// (instead of Continue-ing a dead process) and the dlv child is reaped.
-			if globalDebug == sess {
-				globalDebug = nil
-			}
-			_ = sess.Close()
-			silkideToast(i18n.T("Debuggee exited"), gui.ToastInfo)
-			if globalDebugPanel != nil {
-				globalDebugPanel.Clear()
-			}
+			finishDebugSession(sess)
 		})
 		return
 	}
@@ -4018,7 +3873,7 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 				go func() {
 					entries := evalWatches(sess, exprs)
 					gui.Post(func() {
-						if globalDebugPanel != nil {
+						if globalDebug == sess && globalDebugPanel != nil {
 							globalDebugPanel.SetWatches(entries)
 						}
 					})
@@ -4121,13 +3976,21 @@ func debugStep(kind string) {
 func stopDebugger() {
 	sess := globalDebug
 	globalDebug = nil
-	if sess == nil {
+	a := globalDebugAttempt
+	globalDebugAttempt = nil
+	var pending *core.DebugSession
+	if a != nil {
+		pending = a.cancel()
+	}
+	if sess == nil && a == nil {
 		return
 	}
 	// Close severs the dlv conn (waking any blocked Continue) then detaches
 	// and kills the child. It no longer waits on the session mutex, but the
 	// kill+reap is still I/O — run it off the UI thread.
-	go func() { _ = sess.Close() }()
+	if sess != nil && sess != pending {
+		go debuggerHooks.close(sess)
+	}
 	silkideToast(i18n.T("Debugger stopped"), gui.ToastInfo)
 	logEvent(ged.LogInfo, "Debugger stopped")
 	if globalDebugPanel != nil {
@@ -4588,6 +4451,7 @@ func codeActionsViaLSP(tabs *gui.TabWidget) {
 		}
 		gui.Post(func() {
 			menu := gui.NewPopupMenu()
+			menu.SetParent(ed)
 			for _, a := range actions {
 				act := a // capture per-iteration
 				menu.AddButton1(act.Title, nil).Action().BindFunc0(func() {

@@ -345,6 +345,12 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	size := int(fSize + 0.5)
 	switch x := ico.(type) {
 	case *icon:
+		if x.draw != nil {
+			if fSize > 0 && !math.IsNaN(fSize) && !math.IsInf(fSize, 0) {
+				drawProceduralIcon(this.cairo, x.draw, fSize, grayed)
+			}
+			return
+		}
 		sub := x.getNearest(size)
 		if sub == nil {
 			return

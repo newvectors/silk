@@ -54,9 +54,10 @@ type Frame struct {
 
 	toolViews map[string]*_ToolViewInfo
 
-	statusBar   *StatusBar
-	toolBar     *ToolBar
-	leftSidebar IWidget
+	statusBar      *StatusBar
+	toolBar        *ToolBar
+	contextToolBar *ToolBar
+	leftSidebar    IWidget
 }
 
 // 创建框架Widget
@@ -416,15 +417,14 @@ func (this *Frame) Layout() {
 
 	contentTop := hints.Height
 
-	// Reserve space for toolbar below the menu bar
-	if this.toolBar != nil && this.toolBar.IsVisible() {
-		tbHints := this.toolBar.SizeHints()
-		tbH := tbHints.Height
-		if tbH < 32 {
-			tbH = 32
+	// Reserve both rows before laying out docks; a mode-specific toolbar must
+	// never float over the canvas or its ruler.
+	for _, bar := range []*ToolBar{this.toolBar, this.contextToolBar} {
+		if bar != nil && bar.IsVisible() {
+			tbH := max(32, bar.SizeHints().Height)
+			bar.SetBounds(0, contentTop, this.Width(), tbH)
+			contentTop += tbH
 		}
-		this.toolBar.SetBounds(0, contentTop, this.Width(), tbH)
-		contentTop += tbH
 	}
 
 	contentBottom := this.Height()
@@ -445,12 +445,15 @@ func (this *Frame) Layout() {
 		if lsW < 60 {
 			lsW = 60
 		}
-		this.leftSidebar.SetBounds(0, contentTop, lsW, contentBottom-contentTop)
+		this.leftSidebar.SetBounds(0, contentTop, lsW, max(0, contentBottom-contentTop))
 		contentLeft = lsW
 	}
 
 	if this.root_ != nil {
-		this.root_.SetBounds(contentLeft, contentTop, this.Width()-contentLeft, contentBottom-contentTop)
+		this.root_.SetBounds(contentLeft, contentTop, this.Width()-contentLeft, max(0, contentBottom-contentTop))
+	}
+	if this.toastManager != nil {
+		this.toastManager.layoutToasts(this.Self())
 	}
 	this.Self().Update()
 }
@@ -482,6 +485,20 @@ func (this *Frame) SetToolBar(tb *ToolBar) {
 func (this *Frame) ToolBar() *ToolBar {
 	return this.toolBar
 }
+
+// SetContextToolBar installs a second, mode-specific row below the main bar.
+func (this *Frame) SetContextToolBar(tb *ToolBar) {
+	if this.contextToolBar != nil && this.contextToolBar != tb {
+		this.contextToolBar.SetParent(nil)
+	}
+	this.contextToolBar = tb
+	if tb != nil {
+		tb.SetParent(this)
+	}
+	this.Layout()
+}
+
+func (this *Frame) ContextToolBar() *ToolBar { return this.contextToolBar }
 
 // SetLeftSidebar sets a fixed-width widget on the left edge of the frame,
 // between the toolbar and the dock area. Used for mode selectors.
@@ -802,6 +819,21 @@ func (this *Frame) CanClose() bool {
 
 func (this *Frame) SetClosingCallback(fn func(*Frame)) {
 	this.cbClosing = fn
+}
+
+// AddClosingCallback preserves earlier teardown observers while adding work
+// that must run before CloseAllViews detaches the document tree.
+func (this *Frame) AddClosingCallback(fn func(*Frame)) {
+	if fn == nil {
+		return
+	}
+	previous := this.cbClosing
+	this.cbClosing = func(frame *Frame) {
+		if previous != nil {
+			previous(frame)
+		}
+		fn(frame)
+	}
 }
 
 //func (this *Frame) IsToolViewOpen(typ string) bool {

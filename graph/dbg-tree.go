@@ -47,7 +47,7 @@ func (this *DbgTreeView) DbgTreeModel() *DbgTreeModel {
 	return nil
 }
 
-///////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////
 type DbgTreeModel struct {
 	gui.GuiModel
 	roots   []IItem
@@ -135,7 +135,6 @@ func (m *DbgTreeModel) Data(idx gui.ModelIndex, role gui.ItemDataRole) interface
 	default:
 		return nil
 	}
-	return nil
 }
 
 func (m *DbgTreeModel) HeaderData(section int, vertical bool, role gui.ItemDataRole) interface{} {
@@ -158,7 +157,6 @@ func (m *DbgTreeModel) HeaderData(section int, vertical bool, role gui.ItemDataR
 	default:
 		return nil
 	}
-	return nil
 }
 
 // 获取父节点的索引

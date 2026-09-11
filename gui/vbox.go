@@ -13,6 +13,7 @@ func init() {
 // VBox is a layout container that stacks children vertically.
 // Supports stretch weights, alignment, minimum sizes, and hidden-widget skipping.
 type VBox struct {
+	layoutDisabled bool
 	Widget
 	spacing float64
 	padding Padding
@@ -25,8 +26,10 @@ func NewVBox() *VBox {
 	return p
 }
 
-func (this *VBox) Spacing() float64      { return this.spacing }
-func (this *VBox) SetSpacing(s float64)  { this.spacing = s; this.relayout() }
+func (this *VBox) Spacing() float64     { return this.spacing }
+func (this *VBox) SetSpacing(s float64) { this.spacing = layoutDimension(s); this.relayout() }
+func (this *VBox) Padding() Padding     { return this.padding }
+
 func (this *VBox) SetPadding(p Padding)  { this.padding = p; this.relayout() }
 func (this *VBox) HAlign() TextAlign     { return this.halign }
 func (this *VBox) SetHAlign(a TextAlign) { this.halign = a; this.relayout() }
@@ -40,6 +43,7 @@ func (this *VBox) relayout() {
 
 func (this *VBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("间距", this.Spacing, this.SetSpacing)
+	enumLayoutPadding(list, this.Padding, this.SetPadding)
 }
 
 func (this *VBox) AddWidget(iw IWidget) {
@@ -48,6 +52,9 @@ func (this *VBox) AddWidget(iw IWidget) {
 }
 
 func (this *VBox) Layout() {
+	if this.layoutDisabled {
+		return
+	}
 	if this.NakedWidget().child == nil {
 		return
 	}
@@ -72,7 +79,7 @@ func (this *VBox) Layout() {
 	}
 
 	w, h := this.Self().Size()
-	cx, cy, cw, ch := this.padding.Apply(0, 0, w, h)
+	cx, cy, cw, ch := applyLayoutPadding(this.padding, w, h)
 	if cw <= 0 || ch <= 0 {
 		releaseLayoutScratch(scratch)
 		return
@@ -177,6 +184,9 @@ func (this *VBox) Draw(g paint.Painter) {
 }
 
 func (this *VBox) SizeHints() SizeHints {
+	if this.layoutDisabled {
+		return SizeHints{Width: this.Width(), Height: this.Height()}
+	}
 	// Walk the linked list directly; avoids the slice allocation that
 	// Widget.Children() would perform.
 	n := 0
@@ -201,4 +211,13 @@ func (this *VBox) SizeHints() SizeHints {
 	maxW += this.padding.L + this.padding.R
 
 	return SizeHints{Width: maxW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+}
+
+// LayoutEnabled defaults to true for ordinary runtime widgets. Designer files
+// can explicitly preserve a legacy free-positioned container without having
+// a later resize silently rearrange its contents.
+func (this *VBox) LayoutEnabled() bool { return !this.layoutDisabled }
+func (this *VBox) SetLayoutEnabled(enabled bool) {
+	this.layoutDisabled = !enabled
+	this.InvalidateLayout()
 }

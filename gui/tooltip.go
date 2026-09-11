@@ -21,8 +21,12 @@ func init() {
 // tooltipWindow is a small popup that displays tooltip text.
 type tooltipWindow struct {
 	Widget
-	text string
+	text  string
+	owner IWidget
 }
+
+// A tooltip has an owner but is not a layout/serialized child of that widget.
+func (this *tooltipWindow) Parent() IWidget { return this.owner }
 
 func newTooltipWindow(text string) *tooltipWindow {
 	p := new(tooltipWindow)
@@ -106,34 +110,24 @@ func ShowToolTip(xg, yg float64, text string) {
 	if text == "" {
 		return
 	}
+	owner := FindWidgetGlobal(xg, yg)
+	if owner == nil || owner.OwnerWindow() == nil || !owner.IsAllAncentorsVisible() {
+		return
+	}
 
 	tip := newTooltipWindow(text)
-	tip.LazyAttachWindow(WtPopup)
+	tip.owner = owner
+	tip.SetVisible(false)
 
 	hints := tip.SizeHints()
 	tip.SetSize(0, 0)
 	tip.SetSize(hints.Width, hints.Height)
+	tip.AttachWindow(WtPopup)
 
-	// position near cursor, offset slightly below and to the right
-	tx := xg + 12
-	ty := yg + 18
-
-	// ensure tooltip stays on screen
-	dx, dy, dw, dh := DesktopArea()
-	if tx+hints.Width > dx+dw {
-		tx = dx + dw - hints.Width
-	}
-	if ty+hints.Height > dy+dh {
-		ty = yg - hints.Height - 4
-	}
-	if tx < dx {
-		tx = dx
-	}
-	if ty < dy {
-		ty = dy
-	}
-
-	tip.SetPos(tx, ty)
+	// Use the cursor's monitor, not the primary monitor or the offset tip.
+	area := popupWorkAreaAt(xg, yg)
+	tx, ty := tooltipPositionInWorkArea(area, xg, yg, hints.Width, hints.Height)
+	setPopupGlobalPos(tip, tx, ty)
 	tip.Show()
 
 	currentTooltip = tip
@@ -147,6 +141,7 @@ func hideToolTipLocked() {
 		currentTooltip.Hide()
 		currentTooltip.DetachWindow()
 		currentTooltip.Detach()
+		currentTooltip.owner = nil
 		currentTooltip = nil
 	}
 }

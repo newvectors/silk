@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
@@ -187,6 +188,36 @@ func (this *TerminalPanel) SigSubmit(fn func(cmd string)) {
 // RunWithEnv so any SetExtraEnv state applies here too.
 func (this *TerminalPanel) Run(cmd string) {
 	this.RunWithEnv(cmd, this.extraEnv)
+}
+
+// CommandRunning reports the owned, line-oriented runner only. A user-opened
+// interactive PTY is not an owned Run task and must not be closed by Stop.
+func (this *TerminalPanel) CommandRunning() bool {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.running
+}
+
+// StopRunning cancels the current runner once, without waiting on process I/O.
+// It returns true only when this call requested cancellation. The runner keeps
+// its slot until the process and pipes finish, so rapid Run/Stop cannot race an
+// old worker's cleanup against a new command. Interactive PTYs are untouched.
+func (this *TerminalPanel) StopRunning() bool {
+	this.mu.Lock()
+	if !this.running || this.cancel == nil {
+		this.mu.Unlock()
+		return false
+	}
+	select {
+	case <-this.cancel:
+		this.mu.Unlock()
+		return false
+	default:
+		close(this.cancel)
+	}
+	this.mu.Unlock()
+	this.appendLine(terminalLine{Text: "^C", IsHint: true})
+	return true
 }
 
 // RunWithEnv is like Run but augments the spawned process env with
@@ -709,6 +740,7 @@ func (this *TerminalPanel) runWorker(cmdLine, cwd string, extraEnv []string, can
 		// /bin/sh is universally available on macOS and Linux.
 		c = exec.Command("/bin/sh", "-c", cmdLine)
 	}
+	configureTerminalProcess(c)
 	c.Dir = cwd
 	if len(extraEnv) > 0 {
 		c.Env = mergeEnv(os.Environ(), extraEnv)
@@ -716,6 +748,11 @@ func (this *TerminalPanel) runWorker(cmdLine, cwd string, extraEnv []string, can
 		c.Env = os.Environ()
 	}
 
+	select {
+	case <-cancel:
+		return // Stop won before this worker had spawned its process or pipes.
+	default:
+	}
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		this.pushWorkerLine("[terminal] cannot open stdout pipe: "+err.Error(), true)
@@ -738,8 +775,17 @@ func (this *TerminalPanel) runWorker(cmdLine, cwd string, extraEnv []string, can
 	go func() {
 		select {
 		case <-cancel:
-			if c.Process != nil {
-				_ = c.Process.Kill()
+			if err := killTerminalProcess(c.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				this.pushWorkerLine("[terminal] stop: "+err.Error(), true)
+			}
+			// Even an escaped descendant retaining a pipe cannot wedge the
+			// terminal forever after cancellation. Normal group shutdown drains
+			// to EOF first; only the bounded fallback discards remaining output.
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				_ = stdout.Close()
+				_ = stderr.Close()
 			}
 		case <-done:
 			return
@@ -886,17 +932,8 @@ func (this *TerminalPanel) OnKeyDown(key int, repeat bool) {
 		this.Clear()
 	case ctrl && (key == 'C' || key == 'c'):
 		// Cancel running command; if nothing is running, clear input.
-		this.mu.Lock()
-		running := this.running
-		cancel := this.cancel
-		this.mu.Unlock()
-		if running && cancel != nil {
-			select {
-			case <-cancel:
-			default:
-				close(cancel)
-			}
-			this.appendLine(terminalLine{Text: "^C", IsHint: true})
+		if this.CommandRunning() {
+			this.StopRunning()
 		} else {
 			this.inputText = ""
 			this.Self().Update()

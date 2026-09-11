@@ -21,11 +21,13 @@ var probeWindow *glfw.Window
 // already pinned the main goroutine to that thread and initialised GLFW, and
 // TestMain is the one test entry point that still runs on it.
 func TestMain(m *testing.M) {
-	glfw.WindowHint(glfw.Visible, glfw.False)
-	gw, err := glfw.CreateWindow(1, 1, "silk test", nil, nil)
-	glfw.DefaultWindowHints() // the hints are global; leave them as found
-	if err == nil {
-		probeWindow = gw
+	if glfwReady {
+		glfw.WindowHint(glfw.Visible, glfw.False)
+		gw, err := glfw.CreateWindow(1, 1, "silk test", nil, nil)
+		glfw.DefaultWindowHints() // the hints are global; leave them as found
+		if err == nil {
+			probeWindow = gw
+		}
 	}
 	code := m.Run()
 	// Destroying is main-thread-only for the same reason, so it happens here
@@ -76,6 +78,9 @@ func TestOnWindowCloseObeysTheFrameVeto(t *testing.T) {
 // field onWindowClose and the teardown below it read is filled in.
 func driveWindowClose(t *testing.T, allow bool) (closed int, quit bool) {
 	t.Helper()
+	if !glfwReady {
+		t.Skip("native close callback requires a desktop; widget tests still run headlessly")
+	}
 	if probeWindow == nil {
 		t.Fatal("no GLFW window to close; TestMain could not create one")
 	}

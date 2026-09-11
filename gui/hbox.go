@@ -13,6 +13,7 @@ func init() {
 // HBox is a layout container that stacks children horizontally.
 // Supports stretch weights, alignment, minimum sizes, and hidden-widget skipping.
 type HBox struct {
+	layoutDisabled bool
 	Widget
 	spacing float64
 	padding Padding
@@ -25,8 +26,10 @@ func NewHBox() *HBox {
 	return p
 }
 
-func (this *HBox) Spacing() float64      { return this.spacing }
-func (this *HBox) SetSpacing(s float64)  { this.spacing = s; this.relayout() }
+func (this *HBox) Spacing() float64     { return this.spacing }
+func (this *HBox) SetSpacing(s float64) { this.spacing = layoutDimension(s); this.relayout() }
+func (this *HBox) Padding() Padding     { return this.padding }
+
 func (this *HBox) SetPadding(p Padding)  { this.padding = p; this.relayout() }
 func (this *HBox) VAlign() VertAlign     { return this.valign }
 func (this *HBox) SetVAlign(a VertAlign) { this.valign = a; this.relayout() }
@@ -40,6 +43,7 @@ func (this *HBox) relayout() {
 
 func (this *HBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("间距", this.Spacing, this.SetSpacing)
+	enumLayoutPadding(list, this.Padding, this.SetPadding)
 }
 
 func (this *HBox) AddWidget(iw IWidget) {
@@ -48,6 +52,9 @@ func (this *HBox) AddWidget(iw IWidget) {
 }
 
 func (this *HBox) Layout() {
+	if this.layoutDisabled {
+		return
+	}
 	// No children → nothing to do, avoid pool acquisition entirely.
 	if this.NakedWidget().child == nil {
 		return
@@ -73,7 +80,7 @@ func (this *HBox) Layout() {
 	}
 
 	w, h := this.Self().Size()
-	cx, cy, cw, ch := this.padding.Apply(0, 0, w, h)
+	cx, cy, cw, ch := applyLayoutPadding(this.padding, w, h)
 	if cw <= 0 || ch <= 0 {
 		releaseLayoutScratch(scratch)
 		return
@@ -185,6 +192,9 @@ func (this *HBox) Draw(g paint.Painter) {
 }
 
 func (this *HBox) SizeHints() SizeHints {
+	if this.layoutDisabled {
+		return SizeHints{Width: this.Width(), Height: this.Height()}
+	}
 	// Walk the linked list directly without materializing []IWidget. Each
 	// child's SizeHints() is consulted exactly once and accumulated inline.
 	n := 0
@@ -209,4 +219,13 @@ func (this *HBox) SizeHints() SizeHints {
 	maxH += this.padding.T + this.padding.B
 
 	return SizeHints{Width: totalW, Height: maxH, Policy: GrowHorizontal | GrowVertical}
+}
+
+// LayoutEnabled defaults to true for ordinary runtime widgets. Designer files
+// can explicitly preserve a legacy free-positioned container without having
+// a later resize silently rearrange its contents.
+func (this *HBox) LayoutEnabled() bool { return !this.layoutDisabled }
+func (this *HBox) SetLayoutEnabled(enabled bool) {
+	this.layoutDisabled = !enabled
+	this.InvalidateLayout()
 }

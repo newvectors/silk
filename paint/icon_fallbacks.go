@@ -43,6 +43,50 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"gear":               drawGearCog,
 	"settings":           drawGearCog, // alias of gear
 	"folder-open":        drawFolderOpen,
+	"folder":             drawFolderOpen,
+	"document":           drawGoFile,
+	"run":                drawPlayTriangle,
+	"save":               drawSaveDisk,
+	"preview":            drawPreviewEye,
+	"propsheet":          drawOutlineList,
+	"outline":            drawOutlineList,
+	"tree-view":          drawOutlineList,
+	"packages":           drawFolderOpen,
+	"bookmarks":          drawBookmarkRibbon,
+	"references":         drawFunctionBraces,
+	"log":                drawTerminal,
+	"todo":               drawCheckboxChecked,
+	"silkide":            drawPanelLayout,
+	"design":             drawPanelLayout,
+	"edit":               drawFunctionBraces,
+	"minimize":           drawMinimizeLine,
+	"maximize":           drawMaximizeWindow,
+	"close":              drawCloseX,
+	"error":              drawErrorCircle,
+	"question":           drawHelpCircle,
+	"help":               drawHelpCircle,
+	"window":             drawWindowFrame,
+	"form":               drawFormFields,
+	"link":               drawLinkChain,
+	"keymap":             drawKeyboard,
+	"test-explorer":      drawTestChecklist,
+	"call-hierarchy":     drawCallHierarchy,
+	"type-hierarchy":     drawTypeHierarchy,
+	"project":            drawProjectCube,
+	"diagram":            drawDiagramNodes,
+	"merge":              drawMergeBranches,
+	"layout-horizontal":  drawLayoutCells(3, 1),
+	"layout-vertical":    drawLayoutCells(1, 3),
+	"layout-grid":        drawLayoutCells(2, 2),
+	"layout-form":        drawFormFields,
+	"layout-break":       drawBreakLayout,
+	"layout-adjust":      drawAdjustLayout,
+	"handle-0-normal":    drawResizeHandle(0, false),
+	"handle-0-active":    drawResizeHandle(0, true),
+	"handle-1-normal":    drawResizeHandle(1, false),
+	"handle-1-active":    drawResizeHandle(1, true),
+	"handle-2-normal":    drawResizeHandle(2, false),
+	"handle-2-active":    drawResizeHandle(2, true),
 }
 
 // genProceduralIcon constructs an icon whose subs come from running
@@ -54,24 +98,24 @@ func genProceduralIcon(name string, draw proceduralIconDrawer) *icon {
 	}
 	out := new(icon)
 	out.name = name
+	out.draw = draw
 	for _, size := range []int{16, 22, 32, 48} {
 		s := NewPixmap(size, size)
 		cc := s.NewContext()
 		draw(size, cc)
+		cc.Destroy()
 		out.subs = append(out.subs, &subIcon{size, "", s, nil})
 	}
 	return out
 }
 
-// All drawers below paint a single shape in mid-grey on a transparent
-// background. Stroke width scales with the icon size so 16px and 48px
-// versions stay visually consistent. Colours match the typical
-// JetBrains/Qt Creator monochrome icon look.
+// Geometry uses a shared stroke scale. Exact theme/semantic colors live in
+// icon_palette.go rather than scattered approximate RGB fractions.
 
 func setIconStroke(cc *cairo.Context, size int) {
 	w := float64(size)
-	lw := 1 + w*0.06
-	cc.SetSourceRGBA(0.35, 0.35, 0.4, 0.95)
+	lw := w * (1.75 / 16)
+	setIconColor(cc, currentIconPalette.Foreground)
 	cc.SetLineWidth(lw)
 	cc.SetLineCap(cairo.LINE_CAP_ROUND)
 	cc.SetLineJoin(cairo.LINE_JOIN_ROUND)
@@ -131,13 +175,13 @@ func drawCheckboxUnchecked(size int, cc *cairo.Context) {
 func drawCheckboxChecked(size int, cc *cairo.Context) {
 	w := float64(size)
 	// Filled rounded background.
-	cc.SetSourceRGBA(0.20, 0.50, 0.85, 0.95)
+	setIconColor(cc, currentIconPalette.Accent)
 	pad := w * 0.15
 	r := w * 0.1
 	roundedRect(cc, pad, pad, w-pad*2, w-pad*2, r)
 	cc.Fill()
 	// White check mark.
-	cc.SetSourceRGB(1, 1, 1)
+	setIconColor(cc, currentIconPalette.Paper)
 	cc.SetLineWidth(1 + w*0.07)
 	cc.SetLineCap(cairo.LINE_CAP_ROUND)
 	cc.SetLineJoin(cairo.LINE_JOIN_ROUND)
@@ -149,7 +193,7 @@ func drawCheckboxChecked(size int, cc *cairo.Context) {
 
 func drawExpanderCollapsed(size int, cc *cairo.Context) {
 	w := float64(size)
-	cc.SetSourceRGBA(0.35, 0.35, 0.4, 0.95)
+	setIconColor(cc, currentIconPalette.Foreground)
 	// Right-pointing triangle.
 	cc.MoveTo(w*0.35, w*0.25)
 	cc.LineTo(w*0.65, w*0.5)
@@ -160,7 +204,7 @@ func drawExpanderCollapsed(size int, cc *cairo.Context) {
 
 func drawExpanderExpanded(size int, cc *cairo.Context) {
 	w := float64(size)
-	cc.SetSourceRGBA(0.35, 0.35, 0.4, 0.95)
+	setIconColor(cc, currentIconPalette.Foreground)
 	// Down-pointing triangle.
 	cc.MoveTo(w*0.25, w*0.35)
 	cc.LineTo(w*0.5, w*0.65)
@@ -171,7 +215,7 @@ func drawExpanderExpanded(size int, cc *cairo.Context) {
 
 func drawArrowTool(size int, cc *cairo.Context) {
 	w := float64(size)
-	cc.SetSourceRGBA(0.20, 0.20, 0.25, 1.0)
+	setIconColor(cc, currentIconPalette.Foreground)
 	// Cursor-arrow silhouette.
 	cc.MoveTo(w*0.20, w*0.15)
 	cc.LineTo(w*0.20, w*0.78)
@@ -249,20 +293,26 @@ func drawPlus(size int, cc *cairo.Context) {
 func drawBuildWrench(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
-	// Wrench: an open-jaw ring (circle with a gap facing up-left) and a
-	// diagonal handle running to the lower-right corner.
-	cx, cy, r := w*0.34, w*0.34, w*0.18
-	cc.Arc(cx, cy, r, -1.7, 4.2)
-	cc.Stroke()
-	// Handle from the ring towards the bottom-right.
-	cc.MoveTo(cx+r*0.7071, cy+r*0.7071)
-	cc.LineTo(w*0.78, w*0.78)
+	setIconColor(cc, currentIconPalette.Warning)
+	// Open jaws make this a wrench, not the search glyph's closed ring.
+	cc.MoveTo(w*.72, w*.14)
+	cc.CurveTo(w*.48, w*.10, w*.35, w*.28, w*.40, w*.47)
+	cc.LineTo(w*.16, w*.71)
+	cc.CurveTo(w*.10, w*.77, w*.10, w*.85, w*.16, w*.89)
+	cc.CurveTo(w*.22, w*.94, w*.28, w*.92, w*.33, w*.86)
+	cc.LineTo(w*.58, w*.61)
+	cc.CurveTo(w*.80, w*.68, w*.98, w*.44, w*.90, w*.23)
+	cc.LineTo(w*.75, w*.38)
+	cc.LineTo(w*.62, w*.36)
+	cc.LineTo(w*.60, w*.23)
+	cc.ClosePath()
 	cc.Stroke()
 }
 
 func drawDebugBug(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Violet)
 	// Oval body centred slightly low.
 	bx, by := w*0.5, w*0.55
 	rx, ry := w*0.18, w*0.24
@@ -291,7 +341,7 @@ func drawDebugBug(size int, cc *cairo.Context) {
 func drawStopSquare(size int, cc *cairo.Context) {
 	w := float64(size)
 	// Filled rounded square — the canonical "halt" glyph.
-	cc.SetSourceRGBA(0.35, 0.35, 0.4, 0.95)
+	setIconColor(cc, currentIconPalette.Danger)
 	pad := w * 0.24
 	r := w * 0.08
 	roundedRect(cc, pad, pad, w-pad*2, w-pad*2, r)
@@ -301,7 +351,7 @@ func drawStopSquare(size int, cc *cairo.Context) {
 func drawPlayTriangle(size int, cc *cairo.Context) {
 	w := float64(size)
 	// Right-pointing filled triangle; shared by "continue" and "play".
-	cc.SetSourceRGBA(0.35, 0.35, 0.4, 0.95)
+	setIconColor(cc, currentIconPalette.Success)
 	cc.MoveTo(w*0.30, w*0.22)
 	cc.LineTo(w*0.78, w*0.50)
 	cc.LineTo(w*0.30, w*0.78)
@@ -360,6 +410,7 @@ func drawStepOut(size int, cc *cairo.Context) {
 func drawWarningTriangle(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Warning)
 	// Up-pointing triangle outline.
 	cc.MoveTo(w*0.5, w*0.16)
 	cc.LineTo(w*0.85, w*0.80)
@@ -377,6 +428,7 @@ func drawWarningTriangle(size int, cc *cairo.Context) {
 func drawGitBranch(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Violet)
 	// Two nodes joined by a forking line: a trunk node low-left and a
 	// branch node high-right, the trunk splitting up towards it.
 	trunkX, branchY := w*0.34, w*0.30
@@ -415,6 +467,7 @@ func drawTerminal(size int, cc *cairo.Context) {
 func drawGoFile(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
 	// Document body with a folded top-right corner. Shared by "go-file"
 	// and the generic "file" alias.
 	left, right, top, bot := w*0.26, w*0.74, w*0.16, w*0.84
@@ -436,6 +489,7 @@ func drawGoFile(size int, cc *cairo.Context) {
 func drawFunctionBraces(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Violet)
 	// A pair of curly braces "{ }" — the universal "function/code" mark.
 	top, mid, bot := w*0.20, w*0.50, w*0.80
 	// Left brace.
@@ -474,6 +528,7 @@ func drawGearCog(size int, cc *cairo.Context) {
 func drawFolderOpen(size int, cc *cairo.Context) {
 	w := float64(size)
 	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Warning)
 	// Back panel with a tab, then a slanted front flap suggesting the
 	// folder is open. Complements the closed "folder" glyph.
 	left, right := w*0.16, w*0.84
@@ -536,4 +591,377 @@ func roundedRect(cc *cairo.Context, x, y, w, h, r float64) {
 	cc.LineTo(x, y+r)
 	cc.Arc(x+r, y+r, r, 2*piHalf, 3*piHalf)
 	cc.ClosePath()
+}
+
+func drawSaveDisk(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.MoveTo(w*.2, w*.15)
+	cc.LineTo(w*.7, w*.15)
+	cc.LineTo(w*.85, w*.3)
+	cc.LineTo(w*.85, w*.85)
+	cc.LineTo(w*.15, w*.85)
+	cc.LineTo(w*.15, w*.15)
+	cc.ClosePath()
+	cc.Stroke()
+	cc.Rectangle(w*.3, w*.15, w*.35, w*.25)
+	cc.Stroke()
+	cc.Rectangle(w*.3, w*.58, w*.4, w*.27)
+	cc.Stroke()
+}
+
+func drawPreviewEye(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.MoveTo(w*.08, w*.5)
+	cc.CurveTo(w*.3, w*.15, w*.7, w*.15, w*.92, w*.5)
+	cc.CurveTo(w*.7, w*.85, w*.3, w*.85, w*.08, w*.5)
+	cc.Stroke()
+	cc.Arc(w*.5, w*.5, w*.13, 0, 6.28319)
+	cc.Stroke()
+}
+
+func drawOutlineList(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	for _, y := range []float64{.25, .5, .75} {
+		cc.MoveTo(w*.18, w*y)
+		cc.LineTo(w*.24, w*y)
+		cc.MoveTo(w*.42, w*y)
+		cc.LineTo(w*.82, w*y)
+	}
+	cc.Stroke()
+}
+
+func drawBookmarkRibbon(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Warning)
+	cc.MoveTo(w*.28, w*.15)
+	cc.LineTo(w*.72, w*.15)
+	cc.LineTo(w*.72, w*.85)
+	cc.LineTo(w*.5, w*.68)
+	cc.LineTo(w*.28, w*.85)
+	cc.ClosePath()
+	cc.Stroke()
+}
+
+func drawPanelLayout(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.Rectangle(w*.14, w*.18, w*.72, w*.64)
+	cc.MoveTo(w*.14, w*.36)
+	cc.LineTo(w*.86, w*.36)
+	cc.MoveTo(w*.38, w*.36)
+	cc.LineTo(w*.38, w*.82)
+	cc.Stroke()
+}
+
+func drawMinimizeLine(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.2, w*.65)
+	cc.LineTo(w*.8, w*.65)
+	cc.Stroke()
+}
+
+// Selection handles remain crisp and recognizable without a resource pack.
+func drawResizeHandle(shape int, active bool) proceduralIconDrawer {
+	return func(size int, cc *cairo.Context) {
+		w := float64(size)
+		pad := w * 0.22
+		switch shape {
+		case 1:
+			cc.Arc(w/2, w/2, w/2-pad, 0, 6.283185307179586)
+		case 2:
+			cc.MoveTo(w/2, pad)
+			cc.LineTo(w-pad, w/2)
+			cc.LineTo(w/2, w-pad)
+			cc.LineTo(pad, w/2)
+			cc.ClosePath()
+		default:
+			cc.Rectangle(pad, pad, w-2*pad, w-2*pad)
+		}
+		if active {
+			setIconColor(cc, currentIconPalette.Accent)
+		} else {
+			setIconColor(cc, currentIconPalette.Paper)
+		}
+		cc.FillPreserve()
+		setIconColor(cc, currentIconPalette.Accent)
+		cc.SetLineWidth(w * 0.10)
+		cc.Stroke()
+	}
+}
+
+// Status and panel icons share the same semantic palette as the workbench.
+// None relies on a font glyph (which could be missing) or an external PNG.
+func drawErrorCircle(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Danger)
+	cc.Arc(w*.5, w*.5, w*.35, 0, 6.283185307179586)
+	cc.Stroke()
+	cc.MoveTo(w*.38, w*.38)
+	cc.LineTo(w*.62, w*.62)
+	cc.MoveTo(w*.62, w*.38)
+	cc.LineTo(w*.38, w*.62)
+	cc.Stroke()
+}
+
+func drawHelpCircle(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.Arc(w*.5, w*.5, w*.35, 0, 6.283185307179586)
+	cc.Stroke()
+	cc.MoveTo(w*.39, w*.38)
+	cc.CurveTo(w*.40, w*.24, w*.66, w*.25, w*.62, w*.41)
+	cc.CurveTo(w*.60, w*.48, w*.5, w*.46, w*.5, w*.55)
+	cc.Stroke()
+	cc.Arc(w*.5, w*.69, w*.032, 0, 6.283185307179586)
+	cc.Fill()
+}
+
+func drawWindowFrame(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	roundedRect(cc, w*.13, w*.17, w*.74, w*.66, w*.06)
+	cc.MoveTo(w*.13, w*.35)
+	cc.LineTo(w*.87, w*.35)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.MoveTo(w*.25, w*.26)
+	cc.LineTo(w*.36, w*.26)
+	cc.Stroke()
+}
+
+func drawMaximizeWindow(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	roundedRect(cc, w*.19, w*.19, w*.62, w*.62, w*.03)
+	cc.Stroke()
+}
+
+func drawFormFields(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	for _, y := range []float64{.3, .7} {
+		cc.MoveTo(w*.16, w*y)
+		cc.LineTo(w*.32, w*y)
+	}
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Accent)
+	for _, y := range []float64{.2, .6} {
+		roundedRect(cc, w*.46, w*y, w*.38, w*.2, w*.025)
+	}
+	cc.Stroke()
+}
+
+func drawLinkChain(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	// Open, interlocking capsules leave a clean gap at their crossing.
+	cc.MoveTo(w*.43, w*.28)
+	cc.LineTo(w*.49, w*.22)
+	cc.CurveTo(w*.71, w*.01, w*.99, w*.30, w*.77, w*.51)
+	cc.LineTo(w*.70, w*.58)
+	cc.CurveTo(w*.58, w*.70, w*.47, w*.63, w*.43, w*.57)
+	cc.Stroke()
+	cc.MoveTo(w*.57, w*.72)
+	cc.LineTo(w*.51, w*.78)
+	cc.CurveTo(w*.29, w*.99, w*.01, w*.70, w*.23, w*.49)
+	cc.LineTo(w*.30, w*.42)
+	cc.CurveTo(w*.42, w*.30, w*.53, w*.37, w*.57, w*.43)
+	cc.Stroke()
+}
+
+func drawKeyboard(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	roundedRect(cc, w*.12, w*.25, w*.76, w*.5, w*.05)
+	cc.Stroke()
+	// Filled keys stay distinct even at 16 logical pixels.
+	for _, y := range []float64{.38, .51} {
+		for _, x := range []float64{.26, .42, .58, .74} {
+			cc.Rectangle(w*(x-.028), w*(y-.028), w*.056, w*.056)
+		}
+	}
+	cc.Fill()
+	cc.SetLineWidth(w * .055)
+	cc.MoveTo(w*.33, w*.64)
+	cc.LineTo(w*.67, w*.64)
+	cc.Stroke()
+}
+
+func drawTestChecklist(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	for _, y := range []float64{.3, .7} {
+		cc.MoveTo(w*.56, w*y)
+		cc.LineTo(w*.84, w*y)
+	}
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Success)
+	for _, y := range []float64{.3, .7} {
+		cc.MoveTo(w*.16, w*y)
+		cc.LineTo(w*.25, w*(y+.09))
+		cc.LineTo(w*.41, w*(y-.11))
+	}
+	cc.Stroke()
+}
+
+func drawTypeHierarchy(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.5, w*.36)
+	cc.LineTo(w*.5, w*.52)
+	cc.MoveTo(w*.24, w*.64)
+	cc.LineTo(w*.24, w*.52)
+	cc.LineTo(w*.76, w*.52)
+	cc.LineTo(w*.76, w*.64)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Violet)
+	cc.Rectangle(w*.38, w*.14, w*.24, w*.22)
+	cc.Rectangle(w*.12, w*.64, w*.24, w*.22)
+	cc.Rectangle(w*.64, w*.64, w*.24, w*.22)
+	cc.Stroke()
+}
+
+func drawCallHierarchy(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.36, w*.5)
+	cc.LineTo(w*.49, w*.5)
+	cc.LineTo(w*.49, w*.24)
+	cc.LineTo(w*.63, w*.24)
+	cc.MoveTo(w*.49, w*.5)
+	cc.LineTo(w*.49, w*.76)
+	cc.LineTo(w*.63, w*.76)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Accent)
+	for _, pt := range [][2]float64{{.24, .5}, {.76, .24}, {.76, .76}} {
+		cc.Arc(w*pt[0], w*pt[1], w*.115, 0, 6.283185307179586)
+		cc.Stroke()
+	}
+}
+
+func drawProjectCube(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Warning)
+	cc.MoveTo(w*.5, w*.13)
+	cc.LineTo(w*.84, w*.31)
+	cc.LineTo(w*.84, w*.69)
+	cc.LineTo(w*.5, w*.87)
+	cc.LineTo(w*.16, w*.69)
+	cc.LineTo(w*.16, w*.31)
+	cc.ClosePath()
+	cc.MoveTo(w*.16, w*.31)
+	cc.LineTo(w*.5, w*.5)
+	cc.LineTo(w*.84, w*.31)
+	cc.MoveTo(w*.5, w*.5)
+	cc.LineTo(w*.5, w*.87)
+	cc.Stroke()
+}
+
+func drawDiagramNodes(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.37, w*.28)
+	cc.LineTo(w*.63, w*.28)
+	cc.MoveTo(w*.76, w*.40)
+	cc.LineTo(w*.76, w*.72)
+	cc.LineTo(w*.37, w*.72)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Accent)
+	for _, pt := range [][2]float64{{.12, .16}, {.63, .16}, {.12, .60}} {
+		roundedRect(cc, w*pt[0], w*pt[1], w*.25, w*.24, w*.035)
+	}
+	cc.Stroke()
+}
+
+func drawMergeBranches(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Violet)
+	cc.MoveTo(w*.30, w*.71)
+	cc.LineTo(w*.30, w*.20)
+	cc.MoveTo(w*.70, w*.71)
+	cc.CurveTo(w*.70, w*.46, w*.30, w*.54, w*.30, w*.34)
+	cc.MoveTo(w*.18, w*.31)
+	cc.LineTo(w*.30, w*.19)
+	cc.LineTo(w*.42, w*.31)
+	cc.Stroke()
+	for _, x := range []float64{.30, .70} {
+		cc.Arc(w*x, w*.80, w*.075, 0, 6.283185307179586)
+		cc.Stroke()
+	}
+}
+
+// Layout glyphs depict the exact operation, not generic grid/file placeholders.
+func drawLayoutCells(cols, rows int) proceduralIconDrawer {
+	return func(size int, cc *cairo.Context) {
+		w := float64(size)
+		setIconStroke(cc, size)
+		setIconColor(cc, currentIconPalette.Accent)
+		const pad, gap = .15, .14
+		cw := (1 - 2*pad - float64(cols-1)*gap) / float64(cols)
+		ch := (1 - 2*pad - float64(rows-1)*gap) / float64(rows)
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				cc.Rectangle(w*(pad+float64(col)*(cw+gap)), w*(pad+float64(row)*(ch+gap)), w*cw, w*ch)
+			}
+		}
+		cc.Stroke()
+	}
+}
+
+func drawBreakLayout(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.40, w*.16)
+	cc.LineTo(w*.16, w*.16)
+	cc.LineTo(w*.16, w*.40)
+	cc.MoveTo(w*.60, w*.16)
+	cc.LineTo(w*.84, w*.16)
+	cc.LineTo(w*.84, w*.40)
+	cc.MoveTo(w*.16, w*.60)
+	cc.LineTo(w*.16, w*.84)
+	cc.LineTo(w*.40, w*.84)
+	cc.MoveTo(w*.60, w*.84)
+	cc.LineTo(w*.84, w*.84)
+	cc.LineTo(w*.84, w*.60)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Warning)
+	cc.MoveTo(w*.38, w*.38)
+	cc.LineTo(w*.62, w*.62)
+	cc.MoveTo(w*.62, w*.38)
+	cc.LineTo(w*.38, w*.62)
+	cc.Stroke()
+}
+
+func drawAdjustLayout(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	// Four bounds corners enclose the content box. Unlike diagonal arrows,
+	// this remains legible at 16px and cannot resemble a broken-link glyph.
+	cc.MoveTo(w*.14, w*.32)
+	cc.LineTo(w*.14, w*.14)
+	cc.LineTo(w*.32, w*.14)
+	cc.MoveTo(w*.68, w*.14)
+	cc.LineTo(w*.86, w*.14)
+	cc.LineTo(w*.86, w*.32)
+	cc.MoveTo(w*.14, w*.68)
+	cc.LineTo(w*.14, w*.86)
+	cc.LineTo(w*.32, w*.86)
+	cc.MoveTo(w*.68, w*.86)
+	cc.LineTo(w*.86, w*.86)
+	cc.LineTo(w*.86, w*.68)
+	cc.Rectangle(w*.39, w*.39, w*.22, w*.22)
+	cc.Stroke()
 }

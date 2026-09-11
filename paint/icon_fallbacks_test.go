@@ -189,3 +189,34 @@ func TestNewFallbackDrawNoPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkbenchIconsDoNotNeedExternalResources(t *testing.T) {
+	for _, name := range []string{"document", "folder", "run", "save", "preview", "propsheet", "outline", "tree-view", "packages", "bookmarks", "references", "log", "todo", "silkide", "design", "edit", "minimize", "maximize", "close", "handle-0-normal", "handle-0-active", "handle-1-normal", "handle-1-active", "handle-2-normal", "handle-2-active"} {
+		t.Run(name, func(t *testing.T) {
+			drawer := proceduralFallbacks[name]
+			if drawer == nil {
+				t.Fatal("fallback missing")
+			}
+			ico := genProceduralIcon(name, drawer)
+			if ico.name == "image-missing" || len(ico.subs) != 4 {
+				t.Fatal("missing icon placeholder")
+			}
+			img, err := ico.Pixmap(16).Image()
+			if err != nil {
+				t.Fatal(err)
+			}
+			painted := 0
+			for y := 0; y < 16; y++ {
+				for x := 0; x < 16; x++ {
+					_, _, _, a := img.At(x, y).RGBA()
+					if a > 0 {
+						painted++
+					}
+				}
+			}
+			if painted == 0 {
+				t.Fatal("empty glyph")
+			}
+		})
+	}
+}

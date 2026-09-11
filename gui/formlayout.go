@@ -12,13 +12,14 @@ func init() {
 
 // FormRow represents a label+widget pair in the form layout.
 type FormRow struct {
-	label  *Label
+	label  IWidget
 	widget IWidget
 }
 
 // FormLayout is a two-column layout with labels on the left and widgets on the right
 // (similar to QFormLayout).
 type FormLayout struct {
+	layoutDisabled bool
 	Widget
 	rows       []FormRow
 	labelWidth float64 // width reserved for labels
@@ -47,7 +48,8 @@ func (this *FormLayout) LabelWidth() float64 {
 }
 
 func (this *FormLayout) SetLabelWidth(w float64) {
-	this.labelWidth = w
+	this.labelWidth = layoutDimension(w)
+	this.InvalidateLayout()
 }
 
 func (this *FormLayout) Spacing() float64 {
@@ -55,7 +57,8 @@ func (this *FormLayout) Spacing() float64 {
 }
 
 func (this *FormLayout) SetSpacing(s float64) {
-	this.spacing = s
+	this.spacing = layoutDimension(s)
+	this.InvalidateLayout()
 }
 
 func (this *FormLayout) RowHeight() float64 {
@@ -63,17 +66,22 @@ func (this *FormLayout) RowHeight() float64 {
 }
 
 func (this *FormLayout) SetRowHeight(h float64) {
-	this.rowHeight = h
+	this.rowHeight = layoutDimension(h)
+	this.InvalidateLayout()
 }
 
 func (this *FormLayout) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("标签宽度", this.LabelWidth, this.SetLabelWidth)
 	list.AddProperty("间距", this.Spacing, this.SetSpacing)
+	enumLayoutPadding(list, this.Padding, this.SetPadding)
 	list.AddProperty("行高", this.RowHeight, this.SetRowHeight)
 }
 
+func (this *FormLayout) Padding() Padding { return this.padding }
+
 func (this *FormLayout) SetPadding(p Padding) {
 	this.padding = p
+	this.InvalidateLayout()
 }
 
 // AddRow adds a label+widget pair to the form.
@@ -89,16 +97,47 @@ func (this *FormLayout) AddRow(labelText string, w IWidget) {
 	})
 }
 
+// AddLayoutWidget registers existing designer objects, without manufacturing
+// duplicate labels. Column 0 is the label and column 1 is its field.
+func (this *FormLayout) AddLayoutWidget(w IWidget, row, col, rowSpan, colSpan int) {
+	if w == nil || row < 0 || row > 4095 || col < 0 || col > 1 {
+		return
+	}
+	for len(this.rows) <= row {
+		this.rows = append(this.rows, FormRow{})
+	}
+	if col == 0 {
+		this.rows[row].label = w
+	} else {
+		this.rows[row].widget = w
+	}
+	w.SetParent(this.Self())
+}
+
+func formRowHints(row FormRow) (SizeHints, SizeHints) {
+	var label, field SizeHints
+	if row.label != nil {
+		label = row.label.SizeHints()
+	}
+	if row.widget != nil {
+		field = row.widget.SizeHints()
+	}
+	return label, field
+}
+
 func (this *FormLayout) Layout() {
+	if this.layoutDisabled {
+		return
+	}
 	n := len(this.rows)
 	if n == 0 {
 		return
 	}
 
 	w, h := this.Self().Size()
-	x0, y0, w, h := this.padding.Apply(0, 0, w, h)
+	x0, y0, w, h := applyLayoutPadding(this.padding, w, h)
 
-	labelW := this.labelWidth
+	labelW := math.Min(this.labelWidth, w)
 	widgetX := x0 + labelW + this.spacing
 	widgetW := w - labelW - this.spacing
 	if widgetW < 0 {
@@ -128,9 +167,8 @@ func (this *FormLayout) Layout() {
 			fixedTotal += this.rowHeight
 		} else {
 			// Use the larger of label/widget size hints
-			lh := row.label.SizeHints().Height
-			wh := row.widget.SizeHints().Height
-			rh := math.Max(lh, wh)
+			lh, wh := formRowHints(row)
+			rh := math.Max(lh.Height, wh.Height)
 			if rh > 0 {
 				heights[i] = rh
 				fixedTotal += rh
@@ -155,10 +193,14 @@ func (this *FormLayout) Layout() {
 		}
 
 		// Label: right-aligned in the label column
-		row.label.SetBounds(x0, yOff, labelW, rh)
+		if row.label != nil {
+			row.label.SetBounds(x0, yOff, labelW, rh)
+		}
 
 		// Widget: fills the remaining width
-		row.widget.SetBounds(widgetX, yOff, widgetW, rh)
+		if row.widget != nil {
+			row.widget.SetBounds(widgetX, yOff, widgetW, rh)
+		}
 
 		yOff += rh + this.spacing
 	}
@@ -171,6 +213,9 @@ func (this *FormLayout) Draw(g paint.Painter) {
 }
 
 func (this *FormLayout) SizeHints() SizeHints {
+	if this.layoutDisabled {
+		return SizeHints{Width: this.Width(), Height: this.Height()}
+	}
 	n := len(this.rows)
 	if n == 0 {
 		return SizeHints{}
@@ -178,8 +223,7 @@ func (this *FormLayout) SizeHints() SizeHints {
 
 	var totalH, maxWidgetW float64
 	for _, row := range this.rows {
-		wh := row.widget.SizeHints()
-		lh := row.label.SizeHints()
+		lh, wh := formRowHints(row)
 		rh := math.Max(lh.Height, wh.Height)
 		if this.rowHeight > 0 {
 			rh = this.rowHeight
@@ -193,4 +237,13 @@ func (this *FormLayout) SizeHints() SizeHints {
 	totalW := this.labelWidth + this.spacing + maxWidgetW + this.padding.L + this.padding.R
 
 	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+}
+
+// LayoutEnabled defaults to true for ordinary runtime widgets. Designer files
+// can explicitly preserve a legacy free-positioned container without having
+// a later resize silently rearrange its contents.
+func (this *FormLayout) LayoutEnabled() bool { return !this.layoutDisabled }
+func (this *FormLayout) SetLayoutEnabled(enabled bool) {
+	this.layoutDisabled = !enabled
+	this.InvalidateLayout()
 }

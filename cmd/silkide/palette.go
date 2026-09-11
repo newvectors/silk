@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -42,14 +41,35 @@ var paletteCommands []paletteCommand
 // modal dialogs that the palette dialog itself can't dismiss
 // cleanly) should be left out.
 func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
+	paletteCommands = nil
 	add := func(name, hint string, fn func()) {
+		run := fn
+		if editorCommand(name) {
+			run = func() {
+				if documentMode(editorTabs, designCanvas) != modeEdit || activeEditor(editorTabs) == nil {
+					silkideToast(i18n.T("Open an editor document first"), gui.ToastWarning)
+					return
+				}
+				fn()
+			}
+		}
 		paletteCommands = append(paletteCommands, paletteCommand{
 			Name: i18n.T(name),
-			Hint: hint,
-			Fn:   fn,
+			Hint: strings.ReplaceAll(hint, "Cmd+", actionKeyHint()+"+"),
+			Fn:   run,
 		})
 	}
 
+	for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
+		add([]string{"Welcome", "Edit", "Design"}[i], actionKeyHint()+"+"+[]string{"1", "2", "3"}[i], func() {
+			if globalWorkbench != nil {
+				globalWorkbench.activate(mode)
+			}
+		})
+	}
+	add("Save All", actionKeyHint()+"+Shift+S", func() { performSaveAll(editorTabs, designCanvas) })
+	add("Undo", actionKeyHint()+"+Z", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
+	add("Redo", actionKeyHint()+"+Shift+Z", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
 	// File actions.
 	add("New", "Cmd+N", func() { newDesignCanvas(designCanvas) })
 	add("Open", "Cmd+O", func() {
@@ -63,17 +83,10 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// for "get me back into what I was just editing" without walking the
 	// hamburger submenu. No-op when the MRU is empty.
 	add("Open Recent...", "", func() {
-		if globalPrefs == nil {
-			return
-		}
-		recent := globalPrefs.RecentFiles()
-		if len(recent) == 0 {
-			return
-		}
-		openFromTree(recent[0], editorTabs, designCanvas, nil)
+		showRecentFilesMenu(editorTabs, designCanvas)
 	})
 	add("Save", "Cmd+S", func() {
-		performSave(designCanvas)
+		saveCurrentDocument(editorTabs, designCanvas)
 	})
 	add("Quick Open File", "Cmd+P", func() {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
@@ -89,7 +102,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// the same DiffView popup as Show Diff vs Saved. Cmd+D is free, so it
 	// carries an accelerator; the handler is shared so the palette entry
 	// doubles as keyboard documentation.
-	add("Diff vs HEAD", "Cmd+D", func() {
+	add("Diff vs HEAD", "", func() {
 		showDiffVsHEAD(editorTabs, designCanvas)
 	})
 
@@ -114,6 +127,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	})
 	add("Restart Debug", "", func() { restartDebug() })
 	add("Stop Debugger", "", func() { stopDebugger() })
+	add("Stop", "", stopProjectExecution)
 	add("Go to Definition", "F12", func() { goToDefinitionViaLSP(editorTabs) })
 	add("Format Document", "Cmd+Shift+I", func() { formatDocumentViaLSP(editorTabs) })
 	add("Find References", "Shift+F12", func() { findReferencesViaLSP(editorTabs) })
@@ -151,56 +165,21 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			globalLog.Clear()
 		}
 	})
+	add("Preview", actionKeyHint()+"+Shift+R", func() { previewDesign(designCanvas) })
 	add("Export...", "", func() {
-		if designCanvas == nil {
-			return
-		}
-		path := gui.SaveFileDialog()
-		if path == "" {
-			return
-		}
-		if err := exportDesignCanvas(path, designCanvas); err != nil {
-			// exportDesignCanvas already logs via core.Warn; we also
-			// push the message into the BuildOutput pane so the user
-			// sees something even when the terminal is hidden, and a
-			// transient toast for immediate visual feedback (the pane
-			// only auto-focuses on real build errors, not export ones).
-			reportBuildOutput("export failed: " + err.Error())
-			silkideToast(i18n.T("Export failed"), gui.ToastError)
-			return
-		}
-		silkideToast(i18n.Tf("Exported to %s", filepath.Base(path)), gui.ToastSuccess)
+		performExport(designCanvas)
 	})
 
-	// Edit / canvas actions.
-	add("Undo", "Cmd+Z", func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanUndo() {
-				stack.Undo()
-				designCanvas.Update()
-			}
-		}
-	})
-	add("Redo", "Cmd+Shift+Z", func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanRedo() {
-				stack.Redo()
-				designCanvas.Update()
-			}
-		}
-	})
+	// Design actions share guards and handlers with the context toolbar.
+	for _, action := range designerActionSpecs(designCanvas) {
+		add(action.label, action.hint, action.run)
+	}
 	add("Refresh", "Cmd+R", func() {
 		if designCanvas != nil {
 			designCanvas.Update()
 		}
 	})
-	add("Fit to View", "F", func() { fitCanvasToView(designCanvas) })
+	add("Fit to View", actionKeyHint()+"+Shift+0", func() { fitCanvasToView(designCanvas) })
 
 	// Navigation.
 	add("Find in Files", "Cmd+Shift+F", func() {
@@ -305,7 +284,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Surfaces.
 	add("Project Settings", "", func() { showProjectSettingsDialog(designCanvas) })
 	add("Dump A11y Tree", "Cmd+Shift+A", dumpA11yTree)
-	add("About", "", func() { ged.ShowAboutDialog(designCanvas) })
+	add("About", "", func() { showIDEAbout(designCanvas) })
 }
 
 // filterCommands returns the subset of paletteCommands whose

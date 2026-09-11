@@ -17,7 +17,7 @@ import (
 // own doc comment claimed it matched runProjectTests, and runProjectWithCoverage,
 // which also ranged openEditors off-thread), as had the hot-reload callback,
 // which reopened the whole scene on the file watcher's goroutine.
-var uiMutatingCalls = regexp.MustCompile(`\b(reportBuildOutput|silkideToast|dockSetActiveView|adoptCoverage|applyCoverageToOpenEditors|logEvent|globalTestResults\.SetOutput|scene\.OpenFile|canvas\.GedScene)\(`)
+var uiMutatingCalls = regexp.MustCompile(`\b(reportBuildOutput|silkideToast|dockSetActiveView|adoptCoverage|applyCoverageToOpenEditors|logEvent|globalTestResults\.SetOutput|scene\.OpenFile|reloadCleanDesign|canvas\.GedScene)\(`)
 
 var (
 	goroutineStart = regexp.MustCompile(`\bgo func\s*\(`)
@@ -98,9 +98,9 @@ func TestRunSingleTestMarshalsItsResult(t *testing.T) {
 // repaints — the single largest off-thread mutation in the IDE.
 func TestHotReloadReopensOnTheUIThread(t *testing.T) {
 	body := silkideFuncBody(t, "func startReloader(canvas *ged.GedView) {")
-	open := strings.Index(body, "OpenFile(path)")
+	open := strings.Index(body, "reloadCleanDesign(canvas.GedScene(), path)")
 	if open < 0 {
-		t.Fatal("startReloader no longer reopens the scene; update this test to match")
+		t.Fatal("startReloader no longer calls the guarded reload helper; update this test to match")
 	}
 	post := strings.Index(body, "onUI(func() {")
 	if post < 0 || post > open {

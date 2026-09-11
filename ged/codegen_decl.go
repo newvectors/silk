@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"go/format"
 
+	"github.com/uk0/silk/core"
+
 	"github.com/uk0/silk/decl"
 )
 
@@ -114,8 +116,12 @@ func buildFakeDeclNode(fake *FakeWidget) *decl.Node {
 		Type: fake.WidgetFactoryName(),
 		ID:   fake.WidgetName(),
 	}
-	n.SetProp("x", decl.Lit{V: roundPx(fake.X())})
-	n.SetProp("y", decl.Lit{V: roundPx(fake.Y())})
+	if isDesignerLayoutFactory(fake.factoryName) {
+		n.SetProp("layout_enabled", decl.Lit{V: fake.layoutManaged})
+	}
+	localX, localY := runtimePosition(fake)
+	n.SetProp("x", decl.Lit{V: roundPx(localX)})
+	n.SetProp("y", decl.Lit{V: roundPx(localY)})
 	n.SetProp("width", decl.Lit{V: roundPx(fake.Width())})
 	n.SetProp("height", decl.Lit{V: roundPx(fake.Height())})
 
@@ -131,12 +137,25 @@ func buildFakeDeclNode(fake *FakeWidget) *decl.Node {
 		}
 	}
 
+	// The live designer and .silkui decoder share the same typed property
+	// representation, including intentionally empty captions and alpha colors.
+	if w, ok := fake.Widget().(core.IEnumProperties); ok {
+		props := captureWidgetProperties(w)
+		for _, id := range sortedMapKeys(props) {
+			n.SetProp(id, decl.Persisted{Source: props[id]})
+		}
+	}
+
 	// Recurse into nested children so a container widget (VBox/HBox/...)
 	// emits its laid-out widgets as decl child nodes, mirroring the
 	// designer's tree. Flat widgets have no children and add nothing.
-	for _, c := range fake.Children() {
+	for index, c := range fake.Children() {
 		if child, ok := c.(*FakeWidget); ok {
-			n.Children = append(n.Children, buildFakeDeclNode(child))
+			childNode := buildFakeDeclNode(child)
+			if fake.factoryName == string(LayoutGrid) || fake.factoryName == string(LayoutForm) {
+				setDeclPlacement(childNode, fake.childPlacement(child, index))
+			}
+			n.Children = append(n.Children, childNode)
 		}
 	}
 	return n

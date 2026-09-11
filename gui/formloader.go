@@ -2,7 +2,9 @@ package gui
 
 import (
 	"errors"
-	"strings"
+	"fmt"
+	"github.com/uk0/silk/decl"
+	"reflect"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/geom"
@@ -49,168 +51,72 @@ func LoadFormFromDoc(doc *core.TDoc) (*Form, error) {
 	if doc == nil {
 		return nil, errors.New("gui.LoadFormFromDoc: nil doc")
 	}
-
-	form := NewForm()
-
-	// Form title — legacy key is "title", modern alternative is "form_title".
-	var title string
-	_ = doc.ReadAttr("title", &title)
-	if title == "" {
-		_ = doc.ReadAttr("form_title", &title)
+	// Older hand-authored SDK documents omit the root factory value. Keep
+	// accepting that dialect without mutating a caller-owned/embedded TDoc.
+	source := doc
+	if !doc.HasValue() && doc.ChildByKey("factory", false) == nil && doc.ChildByKey("factoryName", false) == nil {
+		source = doc.Clone()
+		_ = source.SetValue("form")
 	}
-	if title != "" {
-		form.SetTitle(title)
+	node, err := decl.FromTDoc(source)
+	if err != nil {
+		return nil, fmt.Errorf("gui.LoadFormFromDoc: %w", err)
 	}
-
-	// Form size — legacy stores a full Rect under "bounds"; modern alternative
-	// is the pair form_w / form_h (in mm). Convert mm to pixels the same way
-	// the designer does at runtime.
-	var bounds geom.Rect
-	if err := doc.ReadAttr("bounds", &bounds); err == nil && bounds.Width > 0 && bounds.Height > 0 {
-		form.SetSize(MmToPixelZ(bounds.Width), MmToPixelZ(bounds.Height))
-	} else {
-		var w, h float64
-		_ = doc.ReadAttr("form_w", &w)
-		_ = doc.ReadAttr("form_h", &h)
-		if w > 0 && h > 0 {
-			form.SetSize(MmToPixelZ(w), MmToPixelZ(h))
-		}
+	if node.Type != "gui.Form" {
+		return nil, fmt.Errorf("gui.LoadFormFromDoc: root must be gui.Form, got %q", node.Type)
 	}
-
-	// Legacy layout puts widgets under a "children" sub-node (unkeyed subs).
-	if childDoc := doc.ChildByKey("children", false); childDoc != nil {
-		for _, sub := range childDoc.Childdren() {
-			if w, err := loadWidget(sub); err == nil && w != nil {
-				w.SetParent(form)
-			}
-		}
+	obj, err := buildLoadedWidget(node)
+	if err != nil {
+		return nil, err
 	}
-
-	// Modern layout puts each child directly under the root with key="widget".
-	for _, sub := range doc.Childdren() {
-		if sub.Key() != "widget" {
-			continue
-		}
-		if w, err := loadWidget(sub); err == nil && w != nil {
-			w.SetParent(form)
-		}
+	form, ok := obj.(*Form)
+	if !ok {
+		return nil, fmt.Errorf("gui.LoadFormFromDoc: root factory returned %T, want *gui.Form", obj)
 	}
-
 	return form, nil
 }
 
-// loadWidget recursively materialises a widget from its TDoc representation.
-//
-// It accepts two structural dialects:
-//
-//  1. Designer-produced (primary): node value == factory name, Rect stored
-//     under the "bounds" attribute, children either nested under a "children"
-//     sub-node or as further unkeyed subs.
-//  2. Modern / hand-written: factory name under the "factory" attribute,
-//     bounds expressed as separate "x" / "y" / "w" / "h" float attrs, child
-//     widgets as sub-docs with key="widget".
-//
-// Widget-specific fields (text, checked, ...) are applied via interface
-// detection so the loader stays decoupled from concrete widget types.
+// loadWidget shares the same decoder, atomic property initialization and
+// layout-cell registration as generated decl code. Nested absolute designer
+// bounds are localized once by the decoder, never once per SDK/preview path.
 func loadWidget(doc *core.TDoc) (IWidget, error) {
-	if doc == nil {
-		return nil, errors.New("gui.loadWidget: nil doc")
+	node, err := decl.FromTDoc(doc)
+	if err != nil {
+		return nil, fmt.Errorf("gui.loadWidget: %w", err)
 	}
+	return buildLoadedWidget(node)
+}
 
-	// Discover the factory name. Legacy designer files store it as the node
-	// value; newer variants may use a dedicated "factory" / "factoryName"
-	// attribute.
-	var factoryName string
-	_ = doc.Value(&factoryName)
-	factoryName = strings.TrimSpace(factoryName)
-	if factoryName == "" {
-		_ = doc.ReadAttr("factory", &factoryName)
+func buildLoadedWidget(node *decl.Node) (IWidget, error) {
+	// BuildWithIndex normally indexes only named nodes, but this SDK loader
+	// must reject *every* non-widget factory instead of silently losing a
+	// nameless child. These private IDs belong only to the decoded AST, not
+	// the source TDoc or live widgets; no user names are rewritten on disk.
+	types := make(map[string]string)
+	var identify func(*decl.Node)
+	identify = func(n *decl.Node) {
+		n.ID = fmt.Sprintf("load-%d", len(types))
+		types[n.ID] = n.Type
+		for _, child := range n.Children {
+			if child != nil {
+				identify(child)
+			}
+		}
 	}
-	if factoryName == "" {
-		_ = doc.ReadAttr("factoryName", &factoryName)
+	identify(node)
+	obj, index, err := node.BuildWithIndex()
+	if err != nil {
+		return nil, fmt.Errorf("gui.loadWidget: %w", err)
 	}
-	if factoryName == "" {
-		return nil, errors.New("gui.loadWidget: missing factory name")
+	for id, value := range index {
+		if _, ok := value.(IWidget); !ok {
+			return nil, fmt.Errorf("gui.loadWidget: factory %q does not produce IWidget", types[id])
+		}
 	}
-
-	factory := core.FindFactory(factoryName)
-	if factory == nil {
-		return nil, errors.New("gui.loadWidget: unknown widget type: " + factoryName)
-	}
-
-	obj := factory.New()
 	widget, ok := obj.(IWidget)
 	if !ok {
-		return nil, errors.New("gui.loadWidget: factory does not produce IWidget: " + factoryName)
+		return nil, fmt.Errorf("gui.loadWidget: factory %q does not produce IWidget", node.Type)
 	}
-
-	// Bounds: try Rect attribute first, then fall back to x/y/w/h scalars.
-	var rect geom.Rect
-	if err := doc.ReadAttr("bounds", &rect); err == nil && (rect.Width != 0 || rect.Height != 0) {
-		widget.SetBounds(
-			MmToPixelZ(rect.X),
-			MmToPixelZ(rect.Y),
-			MmToPixelZ(rect.Width),
-			MmToPixelZ(rect.Height),
-		)
-	} else {
-		var x, y, w, h float64
-		_ = doc.ReadAttr("x", &x)
-		_ = doc.ReadAttr("y", &y)
-		_ = doc.ReadAttr("w", &w)
-		_ = doc.ReadAttr("h", &h)
-		if w > 0 || h > 0 {
-			widget.SetBounds(MmToPixelZ(x), MmToPixelZ(y), MmToPixelZ(w), MmToPixelZ(h))
-		}
-	}
-
-	// Optional text label — applied via duck-typed interface so any widget
-	// exposing SetText(string) is honoured.
-	var text string
-	_ = doc.ReadAttr("text", &text)
-	if text != "" {
-		if tw, ok := widget.(interface{ SetText(string) }); ok {
-			tw.SetText(text)
-		}
-	}
-
-	// Optional checked/boolean state for checkboxes / toggles.
-	if sub := doc.ChildByKey("checked", false); sub != nil {
-		var b bool
-		if err := sub.Value(&b); err == nil {
-			if cw, ok := widget.(interface{ SetChecked(bool) }); ok {
-				cw.SetChecked(b)
-			}
-		}
-	}
-
-	// Optional generic value (sliders, progress bars, etc.).
-	if sub := doc.ChildByKey("value", false); sub != nil {
-		var fv float64
-		if err := sub.Value(&fv); err == nil {
-			if vw, ok := widget.(interface{ SetValue(float64) }); ok {
-				vw.SetValue(fv)
-			}
-		}
-	}
-
-	// Recurse into children using either dialect.
-	if childDoc := doc.ChildByKey("children", false); childDoc != nil {
-		for _, sub := range childDoc.Childdren() {
-			if cw, err := loadWidget(sub); err == nil && cw != nil {
-				cw.SetParent(widget)
-			}
-		}
-	}
-	for _, sub := range doc.Childdren() {
-		if sub.Key() != "widget" {
-			continue
-		}
-		if cw, err := loadWidget(sub); err == nil && cw != nil {
-			cw.SetParent(widget)
-		}
-	}
-
 	return widget, nil
 }
 
@@ -241,15 +147,17 @@ func SaveForm(form *Form, filename string) error {
 		return err
 	}
 
-	// Convert pixel size back to mm so files stay resolution-independent.
+	// Store logical pixels at the same fixed 96 DPI used by decl/silkgen.
+	// Monitor DPI must not alter an SDK form when it is saved and loaded.
 	w, h := form.Size()
 	_ = doc.WriteAttr("bounds", geom.Rect{
 		X:      0,
 		Y:      0,
-		Width:  PixelToMm(w),
-		Height: PixelToMm(h),
+		Width:  formLogicalPixelToMM(w),
+		Height: formLogicalPixelToMM(h),
 	})
 	_ = doc.WriteAttr("title", form.Title())
+	_ = doc.WriteAttr("bounds_space", "absolute")
 
 	children := form.Children()
 	if len(children) > 0 {
@@ -266,9 +174,17 @@ func SaveForm(form *Form, filename string) error {
 	return doc.SaveFile(filename)
 }
 
+// Designer files express document geometry in millimetres. SDK widgets use
+// logical pixels, not device pixels, matching the generator's fixed 96 DPI.
+func formLogicalPixelToMM(value float64) float64 { return value * 25.4 / 96 }
+
 // serializeWidget produces a TDoc node for a single live widget, matching the
 // format FakeWidget.SaveDesign uses on disk.
 func serializeWidget(w IWidget) *core.TDoc {
+	return serializeWidgetAt(w, 0, 0)
+}
+
+func serializeWidgetAt(w IWidget, parentX, parentY float64) *core.TDoc {
 	if w == nil {
 		return nil
 	}
@@ -279,34 +195,96 @@ func serializeWidget(w IWidget) *core.TDoc {
 	node := core.NewTDoc()
 	_ = node.SetValue(name)
 	x, y, ww, wh := w.Bounds()
+	x, y = x+parentX, y+parentY
 	_ = node.WriteAttr("bounds", geom.Rect{
-		X:      PixelToMm(x),
-		Y:      PixelToMm(y),
-		Width:  PixelToMm(ww),
-		Height: PixelToMm(wh),
+		X:      formLogicalPixelToMM(x),
+		Y:      formLogicalPixelToMM(y),
+		Width:  formLogicalPixelToMM(ww),
+		Height: formLogicalPixelToMM(wh),
 	})
 	if tr, ok := w.(interface{ Text() string }); ok {
-		if t := tr.Text(); t != "" {
-			_ = node.WriteAttr("text", t)
-		}
+		_ = node.WriteAttr("text", tr.Text())
 	}
 	if ch, ok := w.(interface{ IsChecked() bool }); ok {
-		if ch.IsChecked() {
-			_ = node.WriteAttr("checked", true)
+		_ = node.WriteAttr("checked", ch.IsChecked())
+	}
+	if manager, ok := w.(interface{ LayoutEnabled() bool }); ok {
+		_ = node.WriteAttr("layout_managed", manager.LayoutEnabled())
+	}
+	if properties, ok := w.(core.IEnumProperties); ok {
+		props := core.NewTDoc()
+		props.SetKey("props")
+		properties.EnumProperties(&formPropertyWriter{doc: props})
+		if props.HasChildren() {
+			node.AddChild(props)
 		}
 	}
 	kids := w.Children()
+	// An editable combo owns its Edit and popup internally. Rebuilding the
+	// factory creates them; serializing them again manufactures duplicate UI.
+	if _, ok := w.(*ComboBox); ok {
+		kids = nil
+	}
 	if len(kids) > 0 {
 		childDoc := core.NewTDoc()
 		childDoc.SetKey("children")
 		for _, k := range kids {
-			if sub := serializeWidget(k); sub != nil {
+			if sub := serializeWidgetAt(k, x, y); sub != nil {
+				saveFormLayoutCell(w, k, sub)
 				childDoc.AddChild(sub)
 			}
 		}
 		node.AddChild(childDoc)
 	}
 	return node
+}
+
+// Preserve the same explicit property-sheet contract used by the designer,
+// including zero, false and empty strings. No event/binding code is executed.
+type formPropertyWriter struct{ doc *core.TDoc }
+
+func (p *formPropertyWriter) AddProperty(id string, get, set interface{}) {
+	if get == nil || set == nil {
+		return
+	}
+	fn := reflect.ValueOf(get)
+	if fn.Kind() != reflect.Func || fn.IsNil() || fn.Type().NumIn() != 0 || fn.Type().NumOut() != 1 {
+		return
+	}
+	value := fn.Call(nil)[0].Interface()
+	if raw, err := core.PersistString(value); err == nil {
+		_ = p.doc.WriteAttr(id, raw)
+	}
+}
+
+func saveFormLayoutCell(parent, child IWidget, doc *core.TDoc) {
+	row, col, rowSpan, colSpan, found := 0, 0, 1, 1, false
+	switch layout := parent.(type) {
+	case *GridLayout:
+		for _, cell := range layout.cells {
+			if cell.widget == child {
+				row, col, rowSpan, colSpan, found = cell.row, cell.col, cell.rowSpan, cell.colSpan, true
+				break
+			}
+		}
+	case *FormLayout:
+		for i, pair := range layout.rows {
+			if pair.label == child {
+				row, col, found = i, 0, true
+				break
+			}
+			if pair.widget == child {
+				row, col, found = i, 1, true
+				break
+			}
+		}
+	}
+	if found {
+		_ = doc.WriteAttr("layout_row", row)
+		_ = doc.WriteAttr("layout_column", col)
+		_ = doc.WriteAttr("layout_row_span", rowSpan)
+		_ = doc.WriteAttr("layout_column_span", colSpan)
+	}
 }
 
 // hasExt returns true if filename contains a non-trivial extension.

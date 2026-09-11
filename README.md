@@ -1,12 +1,14 @@
 # Silk — Cross-Platform Go UI Framework & Visual Designer
 
-A complete Go-native cross-platform GUI framework with **62+ widgets**, **visual form designer**, and **integrated IDE**. Design your UI visually, generate Go code, compile, and run — all in one tool.
+A Go-native GUI framework with a **visual form designer** and **integrated Go IDE**. Drag widgets onto a canvas, arrange nested layouts, generate Go code, then build and run from the same workbench. The project is working toward a Qt Creator-style workflow; it does not claim full feature parity.
 
 ---
 
 ## Table of Contents
 
-- [Quick Start](#quick-start) — get running in 5 minutes
+- [Integrated Go Designer / IDE](#integrated-go-designer--ide) — screenshot and workflow
+- [Validation Status](#validation-status) — tested platforms and remaining gaps
+- [Quick Start](#quick-start) — build and launch
 - [Development Setup](#development-setup) — prerequisites by OS
 - [Project Structure](#project-structure) — what lives where
 - [Your First App](#your-first-app) — hello world with the SDK
@@ -16,6 +18,69 @@ A complete Go-native cross-platform GUI framework with **62+ widgets**, **visual
 - [Troubleshooting](#troubleshooting) — common issues
 
 ---
+
+## Integrated Go Designer / IDE
+
+![Silk IDE on macOS: widget palette, nested design canvas, selected control properties and build output](screenshots/silkide-designer-macos.jpg)
+
+*Actual macOS arm64 window captured on 2026-09-11, using the dark theme and an isolated demo project. This is a running application, not a mockup.*
+
+```bash
+make run-ide     # Qt Creator-style Go editing + visual design workbench
+make test-ide    # IDE, designer, widgets and tool-engine regression tests
+```
+
+- **Welcome / Edit / Design** modes: `Cmd+1/2/3` on macOS, `Ctrl+1/2/3` elsewhere.
+- Save and undo/redo always target the **visible document**, from the toolbar,
+  command palette or keyboard. `Cmd/Ctrl+Shift+S` saves all changed documents.
+- Real file tabs only: edits show `*`; undoing back to the saved text clears it.
+- Restart restores tab order, active file, cursor, vertical scroll and mode.
+  Missing files are skipped; older path-only sessions still load. Unsaved code
+  buffers are **not** crash backups: save/discard/cancel remains the quit guard.
+- Saving `.silkui` regenerates a companion `.silk.go`: nested widgets, logical
+  geometry, empty captions, scalar properties and exact RGBA colors are preserved.
+  Declarative output describes structure; wire event handlers with `BuildWithIndex`
+  in host code, or use the imperative exporter for handler bodies.
+- Live preview: `Cmd/Ctrl+Shift+R`, or the eye button; export is a separate action.
+- Built-in vector icons require no external directory. They use exact sRGB
+  theme/semantic palettes and rasterize at the device transform for Retina and
+  fractional scaling; disabled icons have their own neutral palette.
+- Build / Run infer the nearest `go.mod` for forms stored in subdirectories;
+  explicit project and run-directory settings take precedence.
+- Drag-and-drop respects nested container ownership and form bounds. HBox, VBox,
+  Grid and Form layouts share selection/locking rules with the context menu.
+- Menus support keyboard navigation, disabled actions and nested popup dismissal.
+  Properties and View Code activate the corresponding dock instead of silently
+  doing nothing; export reports the actual output path or an error.
+- Stop terminates the active Run command and its child processes as well as the
+  debugger; independently opened terminal sessions are left alone.
+- Project settings use the selected project root and persist Kit changes.
+  About separates IDE and SDK versions, shows runtime/build details, and wraps or
+  scrolls long content without overlapping its right-aligned Close button.
+- Fit canvas: `Cmd/Ctrl+Shift+0` (plain `F` remains available for code input).
+
+For desktop verification, use a disposable project and an isolated settings
+home. `gopls` and `dlv` are optional external tools; installing or building the
+IDE alone does not establish language-server or debugger availability.
+
+### Validation Status
+
+| Environment | Latest local evidence | Not established by this check |
+| --- | --- | --- |
+| macOS arm64 / Go 1.26.5 | Real desktop interaction with all 9 main-menu entries, native Open/Save sheets, About/Settings, canvas context actions and Run/Stop; 11-package regression plus saved-design runtime tests | Every secondary panel action, real gopls/dlv end-to-end workflows, mixed-DPI multi-monitor behavior |
+| Linux arm64 / Go 1.26.0 | Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke | Interactive desktop/IME/font coverage; a portable dependency-free binary |
+| Windows amd64 | `silk_pure_go` test-binary type compilation for `ged` and `cmd/silkide` | Native Windows GUI/Cairo execution |
+
+Run/Build currently use **saved files on disk**; save edits before running.
+IDE symbol actions require `gopls` and report when it is unavailable. Some panels
+still have incomplete localization/font fallback. Passing tests or installing
+external tools alone is not a full desktop compatibility claim.
+
+Detailed, dated verification records:
+[workbench](WORKBENCH_QA.md) · [menus and About](MENU_QA.md) ·
+[SDK/platform compatibility](SDK_COMPATIBILITY.md) ·
+[popup ownership](POPUP_AUDIT.md) · [designer gaps](DESIGNER_GAPS.md).
+Local `bin/qa-artifacts/` evidence mentioned in those records is not shipped in Git.
 
 ## Quick Start
 
@@ -27,8 +92,8 @@ cd silk
 # 2. Install system dependencies (macOS)
 brew install cairo pkg-config
 
-# 3. Run the visual designer
-CGO_CFLAGS="-I/opt/homebrew/include" go run design.go
+# 3. Build and run the integrated Go designer / IDE
+make run-ide
 
 # 4. Or run the widget gallery demo
 CGO_CFLAGS="-I/opt/homebrew/include" go run demo.go
@@ -44,7 +109,7 @@ Drag widgets from the left panel onto the canvas, press **F5** to compile & run.
 
 | Dependency | Minimum Version | Purpose |
 |------------|----------------|---------|
-| **Go** | 1.21+ | Compiler |
+| **Go** | 1.26+ | Compiler |
 | **CGO** | enabled | Required for Cairo |
 | **Cairo** | 1.16+ | 2D rendering backend |
 | **pkg-config** | any | Find Cairo headers |
@@ -176,7 +241,7 @@ silk/
 │   ├── tdoc.go           Tree-structured persistence
 │   └── shell.go          Platform file paths
 │
-├── gui/              62+ widgets + theming + layout engine
+├── gui/              Widgets + theming + layout engine
 │   ├── widget.go         Base widget class
 │   ├── button.go, label.go, edit.go, ...
 │   ├── hbox.go, vbox.go, gridlayout.go   Layout containers
@@ -211,7 +276,7 @@ silk/
 │   ├── dashboard/        Charts & data binding
 │   ├── todoapp/          Todo list
 │   ├── texteditor/       Basic text editor
-│   ├── showcase/         All 62 widgets demo
+│   ├── showcase/         Widget gallery demo
 │   └── load_silkui/      SDK loader example
 │
 ├── icon/             PNG icons (4 sizes × 64 icons)
@@ -274,8 +339,8 @@ navigation.
 package main
 
 import (
-    "silk/core"
-    "silk/gui"
+    "github.com/uk0/silk/core"
+    "github.com/uk0/silk/gui"
 )
 
 func main() {
@@ -321,8 +386,8 @@ Design your form visually in the designer, save as `main.silkui`, then:
 package main
 
 import (
-    "silk/core"
-    "silk/gui"
+    "github.com/uk0/silk/core"
+    "github.com/uk0/silk/gui"
     "log"
 )
 
@@ -342,7 +407,7 @@ func main() {
 }
 ```
 
-No designer code needed at runtime — just `silk/core` + `silk/gui`.
+No designer code needed at runtime — just `github.com/uk0/silk/core` + `github.com/uk0/silk/gui`.
 
 ---
 
@@ -448,7 +513,7 @@ go run design.go
 
 ## Features
 
-### 62 Built-in Widgets
+### Built-in Widget Families
 
 - **Input** (15): Button, Edit, CheckBox, RadioButton, ComboBox, SpinBox, Slider, ToggleSwitch, SearchBox, NumberInput, DatePicker, ColorPicker, Rating, DropdownButton, SwitchGroup
 - **Display** (12): Label, ProgressBar, GroupBox, ImageView, Tag, Badge, Avatar, Breadcrumb, Link, LabelSeparator, Placeholder, Timeline
@@ -477,7 +542,7 @@ go run design.go
 - Symbol navigation (Ctrl+Shift+O)
 - 14 Go code snippets, bracket matching
 - Minimap, bookmarks (Ctrl+B)
-- Rename refactoring (Ctrl+Shift+R)
+- Rename refactoring (F2 in Silk IDE; requires gopls)
 - Code formatting via gofmt (Ctrl+Shift+F)
 - Error markers with squiggly underlines
 - Split editor view (Ctrl+\\)

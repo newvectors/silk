@@ -19,10 +19,10 @@ import (
 // Restores the prior translator on return so tests don't leak state.
 func withLocale(t *testing.T, locale string, table map[string]string, fn func()) {
 	t.Helper()
-	saved := *i18n.Default
-	defer func() { *i18n.Default = saved }()
+	saved := i18n.Default
+	defer func() { i18n.Default = saved }()
 
-	*i18n.Default = *i18n.NewTranslator()
+	i18n.Default = i18n.NewTranslator()
 	if len(table) > 0 {
 		i18n.AddMany(locale, table)
 	}
@@ -109,9 +109,9 @@ func TestTrKeyTDocRoundTrip(t *testing.T) {
 // Without this guarantee, an app that delayed widget construction
 // past startup might render the wrong language.
 func TestTrKeyLocaleSwitchBeforeBuildAffectsResult(t *testing.T) {
-	saved := *i18n.Default
-	defer func() { *i18n.Default = saved }()
-	*i18n.Default = *i18n.NewTranslator()
+	saved := i18n.Default
+	defer func() { i18n.Default = saved }()
+	i18n.Default = i18n.NewTranslator()
 	i18n.AddMany("zh-CN", map[string]string{"OK": "确定"})
 	i18n.AddMany("ja", map[string]string{"OK": "OK (ja)"})
 

@@ -4,54 +4,27 @@ import (
 	"reflect"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
 	"github.com/uk0/silk/paint"
 )
 
-// This file adds round-trip persistence for the *embedded* widget's editable
-// scalar properties (text, values, tag bindings, device settings, ...) that a
-// concrete widget exposes through core.IEnumProperties. FakeWidget.SaveDesign /
-// LoadDesign already persist the FakeWidget's own geometry, name, code, event
-// handlers and nested children; the widget-specific fields enumerated by the
-// embedded widget (gui.Tank's level/min/max/tag, gui.Edit's text, ...) were
-// dropped on save until now, so a configured design lost those values on reload.
-//
-// Scope: the scalar-typed properties — string, bool, the signed/unsigned
-// integer kinds and float32/float64 — plus paint.Color, which is a struct but
-// is the one complex type the designer can actually edit (prop.ColorEdit). A
-// property the user can change but that vanishes on save is worse than one they
-// cannot change at all, so the editor and this file have to cover the same set.
-// The remaining complex types (other structs, slices) are still skipped.
-//
-// Values are (de)serialized with the same core.PersistString / core.PersistSscan
-// pair TDoc itself uses for node values, so the captured form matches the rest
-// of the design document. A Color rides the same PersistString path — it lands
-// in the interface{ String() string } case and comes out as "#RRGGBB[AA]" — but
-// has to be read back with paint.ParseColor, because fmt has no scanner for a
-// struct and PersistSscan fails outright on one.
-
-// captureWidgetProperties drives w.EnumProperties with a recording stand-in and
-// returns a map of property id -> serialized scalar value. Read-only properties
-// (nil setter) and non-scalar types are skipped, so every captured entry can be
-// fed back through applyWidgetProperties.
+// Embedded widget properties are separate from FakeWidget geometry, names,
+// event handlers and children. Persist scalars, exact paint.Color and []string
+// item lists exposed by the property sheet; skip other complex types. Values
+// use TDoc's core.PersistString syntax, not executable expressions or tag refs.
 func captureWidgetProperties(w core.IEnumProperties) map[string]string {
 	c := &propCapture{vals: make(map[string]string)}
 	w.EnumProperties(c)
 	return c.vals
 }
 
-// applyWidgetProperties drives w.EnumProperties to obtain each property's setter
-// and, for every id present in vals, parses the stored string into the setter's
-// parameter type and calls it. Ids absent from vals, read-only properties and
-// non-scalar setter types are left untouched.
+// Use the SDK's exact codec and dependency handling for the designer, its live
+// preview and clipboard/morph restoration too. Sequential scalar setters used
+// to lose item lists and clamp values against partially restored ranges.
 func applyWidgetProperties(w core.IEnumProperties, vals map[string]string) {
-	if len(vals) == 0 {
-		return
-	}
-	w.EnumProperties(&propApply{vals: vals})
+	decl.ApplyPersistedProperties(w, vals)
 }
 
-// propCapture implements core.IPropertyList, serializing each scalar property
-// that also has a setter (a read-only value could never be restored).
 type propCapture struct {
 	vals map[string]string
 }
@@ -62,7 +35,7 @@ func (c *propCapture) AddProperty(id string, get, set interface{}) {
 	}
 	gv := reflect.ValueOf(get)
 	gt := gv.Type()
-	if gt.Kind() != reflect.Func || gt.NumIn() != 0 || gt.NumOut() != 1 {
+	if gt.Kind() != reflect.Func || gv.IsNil() || gt.NumIn() != 0 || gt.NumOut() != 1 {
 		return
 	}
 	if s, ok := scalarToString(gv.Call(nil)[0]); ok {
@@ -70,45 +43,14 @@ func (c *propCapture) AddProperty(id string, get, set interface{}) {
 	}
 }
 
-// propApply implements core.IPropertyList, calling each setter with the parsed
-// stored value.
-type propApply struct {
-	vals map[string]string
-}
-
-func (a *propApply) AddProperty(id string, get, set interface{}) {
-	if set == nil {
-		return
-	}
-	s, ok := a.vals[id]
-	if !ok {
-		return
-	}
-	sv := reflect.ValueOf(set)
-	st := sv.Type()
-	if st.Kind() != reflect.Func || st.NumIn() != 1 || st.NumOut() != 0 {
-		return
-	}
-	if val, ok := parseScalar(s, st.In(0)); ok {
-		sv.Call([]reflect.Value{val})
-	}
-}
-
-// colorType is paint.Color's reflect.Type. It is the one struct type capture
-// and apply carry; every other struct is still skipped.
 var colorType = reflect.TypeOf(paint.Color{})
 
-// scalarToString serializes a scalar reflect.Value with core.PersistString,
-// normalizing named types to their base kind first. paint.Color is handled
-// ahead of the kind switch. It reports false for any other non-scalar kind
-// (structs, slices, ...), which the caller skips.
+// Normalize named scalar kinds before persistence. Only the exact supported
+// complex types are accepted, rather than capturing data we cannot restore.
 func scalarToString(v reflect.Value) (string, bool) {
-	if v.Type() == colorType {
+	if v.Type() == colorType || v.Type() == reflect.TypeOf([]string{}) {
 		s, err := core.PersistString(v.Interface())
-		if err != nil {
-			return "", false
-		}
-		return s, true
+		return s, err == nil
 	}
 	var raw interface{}
 	switch v.Kind() {
@@ -126,71 +68,5 @@ func scalarToString(v reflect.Value) (string, bool) {
 		return "", false
 	}
 	s, err := core.PersistString(raw)
-	if err != nil {
-		return "", false
-	}
-	return s, true
-}
-
-// parseScalar parses s into a value of the scalar type pt using the
-// core.PersistSscan counterpart of scalarToString, converting through the base
-// kind so named types (e.g. a defined float64) are handled. paint.Color is
-// handled ahead of the kind switch. It reports false for any other non-scalar
-// target type.
-func parseScalar(s string, pt reflect.Type) (reflect.Value, bool) {
-	if pt == colorType {
-		c, ok := parseColor(s)
-		if !ok {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(c), true
-	}
-	switch pt.Kind() {
-	case reflect.String:
-		var v string
-		if _, err := core.PersistSscan(s, &v); err != nil {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(v).Convert(pt), true
-	case reflect.Bool:
-		var v bool
-		if _, err := core.PersistSscan(s, &v); err != nil {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(v).Convert(pt), true
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		var v int64
-		if _, err := core.PersistSscan(s, &v); err != nil {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(v).Convert(pt), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		var v uint64
-		if _, err := core.PersistSscan(s, &v); err != nil {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(v).Convert(pt), true
-	case reflect.Float32, reflect.Float64:
-		var v float64
-		if _, err := core.PersistSscan(s, &v); err != nil {
-			return reflect.Value{}, false
-		}
-		return reflect.ValueOf(v).Convert(pt), true
-	default:
-		return reflect.Value{}, false
-	}
-}
-
-// parseColor reads back the "#RRGGBB"/"#RRGGBBAA" form scalarToString writes.
-// The shape is checked first because paint.ParseColor answers opaque black for
-// anything it does not recognise: an absent or truncated value would silently
-// repaint the widget black instead of leaving the property alone.
-func parseColor(s string) (paint.Color, bool) {
-	if len(s) != 7 && len(s) != 9 {
-		return paint.Color{}, false
-	}
-	if s[0] != '#' {
-		return paint.Color{}, false
-	}
-	return paint.ParseColor(s), true
+	return s, err == nil
 }

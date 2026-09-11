@@ -222,6 +222,7 @@ const (
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
 type CodeEditor struct {
+	savedText string
 	Widget
 	text       string
 	lines      []string
@@ -348,6 +349,7 @@ type CodeEditor struct {
 	filePath       string // path of the file currently being edited
 	navStack       NavigationStack
 	cbNavigate     func(filePath string, line int) // callback for cross-file navigation
+	symbolActions  CodeEditorSymbolActions
 
 	// --- LSP host hooks (hover + signature help) ---
 	// These are host-driven signals: the editor only reports WHERE the user is
@@ -4666,6 +4668,63 @@ type editorContextMenuItem struct {
 	Action    func() // nil when Separator or Enabled is false
 }
 
+// CodeEditorSymbolActions lets a host use semantic/workspace services for the
+// editor's symbol commands. A nil callback preserves that command's standalone
+// SDK implementation. A supplied callback owns the entire result, including
+// unavailable-service feedback; failure never silently falls back to a local
+// text operation. Callbacks receive the editor whose menu requested the action.
+type CodeEditorSymbolActions struct {
+	RenameSymbol   func(*CodeEditor)
+	GoToDefinition func(*CodeEditor)
+	FindReferences func(*CodeEditor)
+}
+
+// SetSymbolActions replaces the host hooks for this editor instance. Passing
+// an empty value restores all standalone SDK behaviors.
+func (this *CodeEditor) SetSymbolActions(actions CodeEditorSymbolActions) {
+	this.symbolActions = actions
+}
+
+// RequestRenameSymbol dispatches the user command to the host, or opens the
+// SDK's local single-buffer rename dialog when no host has registered it.
+func (this *CodeEditor) RequestRenameSymbol() {
+	word := this.wordAtCursor()
+	if word == "" {
+		return
+	}
+	if this.symbolActions.RenameSymbol != nil {
+		this.symbolActions.RenameSymbol(this)
+		return
+	}
+	this.promptRenameSymbol(word)
+}
+
+// RequestGoToDefinition dispatches a user command without changing the direct
+// GoToDefinitionAtCursor API's local navigation semantics.
+func (this *CodeEditor) RequestGoToDefinition() {
+	if this.wordAtCursor() == "" {
+		return
+	}
+	if this.symbolActions.GoToDefinition != nil {
+		this.symbolActions.GoToDefinition(this)
+		return
+	}
+	this.GoToDefinitionAtCursor()
+}
+
+// RequestFindReferences dispatches to a registered host, or highlights local
+// buffer references for standalone SDK consumers.
+func (this *CodeEditor) RequestFindReferences() {
+	if this.wordAtCursor() == "" {
+		return
+	}
+	if this.symbolActions.FindReferences != nil {
+		this.symbolActions.FindReferences(this)
+		return
+	}
+	this.HighlightReferencesAtCursor()
+}
+
 // contextMenuItems builds the right-click menu for the editor at the
 // current cursor / selection state. The Cut and Copy entries are
 // disabled when there is no selection (matches Qt Creator / VS Code).
@@ -4701,17 +4760,17 @@ func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []ed
 		{
 			Label:   "重命名符号",
 			Enabled: hasWord,
-			Action:  func() { this.promptRenameSymbol(word) },
+			Action:  this.RequestRenameSymbol,
 		},
 		{
 			Label:   "跳转定义",
 			Enabled: hasWord,
-			Action:  func() { this.GoToDefinitionAtCursor() },
+			Action:  this.RequestGoToDefinition,
 		},
 		{
 			Label:   "查找引用",
 			Enabled: hasWord,
-			Action:  func() { this.HighlightReferencesAtCursor() },
+			Action:  this.RequestFindReferences,
 		},
 	}
 }
@@ -5222,8 +5281,13 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 	}
 	// --- Find bar key routing ---
 	if this.findActive {
+		// Close from either input row, before replace-focused routing consumes F.
+		if key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier()) && !IsKeyDown(KeyShift) {
+			this.closeFindBar()
+			return
+		}
 		// Ctrl+H toggles the replace input row.
-		if key == 'H' && IsKeyDown(KeyCtrl) {
+		if key == 'H' && (IsKeyDown(KeyCtrl) || isActionModifier()) {
 			this.toggleReplaceRow()
 			return
 		}
@@ -5326,13 +5390,13 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			return
 		}
 		// Let Ctrl+F pass through to toggle find off below
-		if !(key == 'F' && IsKeyDown(KeyCtrl)) {
+		if !(key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier())) {
 			return
 		}
 	}
 
 	shift := IsKeyDown(KeyShift)
-	ctrl := IsKeyDown(KeyCtrl)
+	ctrl := IsKeyDown(KeyCtrl) || isActionModifier()
 	alt := IsKeyDown(KeyMenu)
 
 	// Helper: begin or extend selection on shift-modified movement

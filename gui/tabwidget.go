@@ -33,6 +33,7 @@ func (this *tabPageRef) Icon() paint.Icon {
 // a tabbed page container, equivalent to QTabWidget in Qt.
 type TabWidget struct {
 	Widget
+	title  string
 	tabBar *TabBar
 	stack  *StackedWidget
 	refs   []*tabPageRef
@@ -109,6 +110,23 @@ func (this *TabWidget) AddTab(w IWidget, title string, icon paint.Icon) {
 	if i, ok := this.Self().(ILayout); ok {
 		i.Layout()
 	}
+}
+
+// SetTabTitle changes metadata without replacing the page or its undo history.
+func (this *TabWidget) SetTabTitle(idx int, title string) {
+	if idx < 0 || idx >= len(this.refs) || this.refs[idx].title == title {
+		return
+	}
+	this.refs[idx].title = title
+	this.tabBar.Layout()
+	this.tabBar.Update()
+}
+
+func (this *TabWidget) TabTitle(idx int) string {
+	if idx < 0 || idx >= len(this.refs) {
+		return ""
+	}
+	return this.refs[idx].title
 }
 
 func (this *TabWidget) RemoveTab(idx int) {
@@ -286,3 +304,7 @@ func (this *TabWidget) SizeHints() SizeHints {
 
 	return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 }
+
+// Title identifies this editor group in a containing dock.
+func (this *TabWidget) Title() string         { return this.title }
+func (this *TabWidget) SetTitle(title string) { this.title = title; this.Update() }

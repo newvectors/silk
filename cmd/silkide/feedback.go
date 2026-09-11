@@ -8,9 +8,9 @@ import (
 	"github.com/uk0/silk/i18n"
 )
 
-// globalFrame is the topmost silkide window. Toast notifications anchor
-// to it so they pop above the IDE shell rather than the active editor
-// pane (which would clip them to the pane's bounds). Set in main()
+// globalFrame is the topmost silkide window. Toast notifications render
+// inside it, above document content but below the action toolbars, rather
+// than in independent floating native windows. Set in main()
 // after gui.NewFrameWindow returns; nil before that, and silkideToast
 // is built to no-op in the nil case so panics never reach a user.
 var globalFrame *gui.Frame
@@ -35,34 +35,25 @@ var silkideToast = func(msg string, level gui.ToastLevel) {
 	gui.ShowToast(globalFrame, msg, 2500, level)
 }
 
-// performSave saves the active design scene if any, regenerates the
-// sibling .silk.go on success, and surfaces a "Saved <name>" toast.
-// Returns true on save success.
-//
-// Used by every explicit Save action — Cmd+S, the toolbar save icon,
-// the hamburger menu, and the Command Palette — so the side effects
-// (file write + .silk.go regen + toast) stay consistent regardless of
-// entry point. The dirty-discard prompt path keeps its own scene.Save
-// call: it has its own confirmation flow and a stacked toast there
-// would race the dialog dismissal animation.
-//
-// Save returning false typically means the user cancelled a
-// SaveFileDialog (filenameless scene); we stay silent in that case.
-// A real disk error is hard to distinguish from cancel without a
-// richer return type from scene.Save, so the message bias is toward
-// not toasting "Save failed" when the user actually clicked Cancel.
+// saveDesignDocument is shared by explicit saves and quit/open/new guards.
+// It attempts companion Go generation after saving; failures appear in Output
+// but do not invalidate the successfully saved design document.
+func saveDesignDocument(canvas *ged.GedView) bool {
+	if canvas == nil || canvas.GedScene() == nil || !canvas.GedScene().Save() {
+		return false
+	}
+	regenerateGoForSilkui(canvas.GedScene().Filename())
+	return true
+}
+
+// performSave adds feedback to the shared save flow. Dirty-work prompts use
+// saveDesignDocument directly to avoid stacking a toast on a closing dialog.
+// The scene API does not distinguish a cancelled chooser from a failed write.
 func performSave(canvas *ged.GedView) bool {
-	if canvas == nil {
+	if !saveDesignDocument(canvas) {
 		return false
 	}
 	scene := canvas.GedScene()
-	if scene == nil {
-		return false
-	}
-	if !scene.Save() {
-		return false
-	}
-	regenerateGoForSilkui(scene.Filename())
 	name := filepath.Base(scene.Filename())
 	if name == "" || name == "." {
 		name = i18n.T("untitled")

@@ -259,6 +259,7 @@ type calendarNopPainter struct{ paint.Painter }
 func (calendarNopPainter) Arc(xc, yc, radius, angle1, angle2 float64) {}
 func (calendarNopPainter) MoveTo(x, y float64)                        {}
 func (calendarNopPainter) LineTo(x, y float64)                        {}
+func (calendarNopPainter) Rectangle(x, y, w, h float64)               {}
 func (calendarNopPainter) Fill()                                      {}
 func (calendarNopPainter) Stroke()                                    {}
 func (calendarNopPainter) SetBrush1(c paint.Color)                    {}

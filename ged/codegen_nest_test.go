@@ -22,6 +22,7 @@ func TestGenerateCodeNestedContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create VBox: %v", err)
 	}
+	vbox.layoutManaged = true
 	vbox.SetWidgetName("box")
 	vbox.SetBounds(10, 10, 80, 60)
 	vbox.SetParent(scene)
@@ -74,13 +75,10 @@ func TestGenerateCodeNestedContainer(t *testing.T) {
 	}
 }
 
-// TestGenerateCodeNonAddContainerFallsBack verifies that a container
-// NOT in simpleAddContainers (e.g. a plain widget acting as parent)
-// gets SetParent + SetBounds for its children rather than AddWidget,
-// keeping the generated code compilable for any parent type. We use a
-// GridLayout parent (excluded from simpleAddContainers because its
-// AddWidget needs row/col).
-func TestGenerateCodeNonAddContainerFallsBack(t *testing.T) {
+// TestGenerateCodeGridRegistersCells ensures the generated constructor
+// populates the grid cell model rather than silently falling back to absolute
+// SetParent geometry (which compiled but never resized as a grid).
+func TestGenerateCodeGridRegistersCells(t *testing.T) {
 	scene := NewGedScene()
 	scene.SetSize(200, 150)
 
@@ -88,6 +86,7 @@ func TestGenerateCodeNonAddContainerFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create GridLayout: %v", err)
 	}
+	grid.layoutManaged = true
 	grid.SetWidgetName("grid")
 	grid.SetBounds(10, 10, 100, 80)
 	grid.SetParent(scene)
@@ -99,11 +98,9 @@ func TestGenerateCodeNonAddContainerFallsBack(t *testing.T) {
 
 	code := scene.GenerateCode(CodeGenOptions{TypeName: "GridUI"})
 
-	// GridLayout's single-arg AddWidget doesn't exist, so the child must
-	// use SetParent(ui.Grid) + SetBounds, NOT AddWidget. (Names are
-	// exported-capitalised: grid→Grid, cellBtn→CellBtn.)
-	if !strings.Contains(code, "ui.CellBtn.SetParent(ui.Grid)") {
-		t.Errorf("grid child should SetParent to the grid\n--- code ---\n%s", code)
+	// The unified bridge carries the row/column/span explicitly.
+	if !strings.Contains(code, "ui.Grid.AddLayoutWidget(ui.CellBtn, 0, 0, 1, 1)") {
+		t.Errorf("grid child must be registered in the real grid cell list\n--- code ---\n%s", code)
 	}
 	if strings.Contains(code, "ui.Grid.AddWidget(ui.CellBtn)") {
 		t.Errorf("grid child must NOT use single-arg AddWidget (needs row/col)\n--- code ---\n%s", code)

@@ -134,6 +134,10 @@ type Widget struct {
 
 	focusPolicy FocusPolicy
 
+	// Transient notifications are painted and hit-tested as overlays, never
+	// inserted into the document/layout child list.
+	toastManager *ToastManager
+
 	extraData interface{}
 
 	wt  WindowType
@@ -300,6 +304,9 @@ func (this *Widget) setSize(width, height float64) {
 	if this.w != width || this.h != height {
 		this.w, this.h = width, height
 		this.Self().(IWidgetEvent).OnResize()
+		if this.toastManager != nil {
+			this.toastManager.layoutToasts(this.Self())
+		}
 	}
 }
 
@@ -500,6 +507,11 @@ func findInParentCoord(this IWidget, xp, yp, cx, cy, cw, ch float64) IWidget {
 func (this *Widget) FindWidgetAt(x, y float64) IWidget {
 	ww, wh := this.Size()
 	if x >= 0 && y >= 0 && x < ww && y < wh {
+		if this.toastManager != nil {
+			if toast := this.toastManager.hitTest(this.Self(), x, y); toast != nil {
+				return toast
+			}
+		}
 		head := this.NakedWidget().child
 		if head != nil {
 			for c := head.prev; ; c = c.prev {
@@ -698,6 +710,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
+		dismissOwnedToasts(this.Self())
 		if i, ok := this.Self().(IEventHide); ok {
 			i.OnHide()
 		}
@@ -740,9 +753,12 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 			panic("")
 		}
 
+		// Resolve the actual owner before installing our own Window. Otherwise
+		// OwnerWindow returns the new window itself, losing native ownership.
+		owner := this.OwnerWindow()
 		this.win = new(Window)
 		this.win.widget = this.Self()
-		err := this.win.create(this.OwnerWindow(), this.wt)
+		err := this.win.create(owner, this.wt)
 		if err != nil {
 			this.win = nil
 		}
@@ -754,6 +770,7 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 }
 
 func (this *Widget) DetachWindow() {
+	dismissOwnedToasts(this.Self())
 	this.wt = WtInherit
 	this.syncWindow(this.IsVisible(), false)
 }

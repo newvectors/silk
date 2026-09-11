@@ -8,7 +8,6 @@ import (
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 	"math"
-	"sort"
 	"strings"
 	"time"
 )
@@ -70,8 +69,10 @@ type SelectionCallback func(items []graph.IItem)
 
 type GedView struct {
 	graph.GraphView
-	selCallbacks []SelectionCallback
-	showGrid     bool // paint the faint background dot overlay on top of the page
+	selCallbacks        []SelectionCallback
+	showPropertiesPanel func()
+	showCodePanel       func()
+	showGrid            bool // paint the faint background dot overlay on top of the page
 
 	// Alignment guide state for drag operations
 	alignGuides []alignGuide
@@ -91,6 +92,11 @@ type GedView struct {
 	// selection click re-parents anything.
 	dropContainer  graph.IItem
 	dragMovesItems bool
+	paletteDrop    paletteDropFeedback
+	managedPress   bool
+	managedPressX  float64
+	managedPressY  float64
+	managedHint    paletteDropFeedback
 
 	// gestureSeq groups the commands pushed by one continuous keyboard
 	// gesture so they collapse into a single undo step; see beginGesture.
@@ -130,9 +136,16 @@ func (this *GedView) Init(self gui.IWidget) {
 	this.AddStandardTools()
 	this.SetPropertyConfigName("ged")
 
-	// Update the status bar when selection changes, then dispatch to
-	// additional callbacks (e.g. the code panel).
+	// Notify embedded tools independently of whether a frame/status bar exists.
+	// Selection notifications are delivered by the GraphView idle heartbeat.
 	this.SigSelectionChanged(func(s interface{}, sel *graph.Selection) {
+		if !this.managedPress {
+			this.clearManagedGeometryHint()
+		}
+		items := sel.ItemList()
+		for _, cb := range this.selCallbacks {
+			cb(items)
+		}
 		frame := gui.FindOwnerFrame(this)
 		if frame == nil {
 			return
@@ -159,12 +172,6 @@ func (this *GedView) Init(self gui.IWidget) {
 		} else {
 			sb.ShowMessage(fmt.Sprintf("Selected: %d items", count))
 		}
-
-		// Dispatch to additional selection callbacks
-		items := sel.ItemList()
-		for _, cb := range this.selCallbacks {
-			cb(items)
-		}
 	})
 }
 
@@ -178,6 +185,7 @@ func (this *GedView) GedScene() *GedScene {
 // PushCommand raises never fires for an undo — every listener on it would
 // otherwise keep showing the state Ctrl+Z just left.
 func (this *GedView) Undo() {
+	this.clearManagedGeometryHint()
 	stack := this.Scene().UndoStack()
 	if stack == nil {
 		return
@@ -186,11 +194,13 @@ func (this *GedView) Undo() {
 	if scene := this.GedScene(); scene != nil {
 		scene.NotifyDesignChanged()
 	}
+	this.refreshPropertyValues()
 	this.Self().Update()
 }
 
 // Redo is Undo in the other direction.
 func (this *GedView) Redo() {
+	this.clearManagedGeometryHint()
 	stack := this.Scene().UndoStack()
 	if stack == nil {
 		return
@@ -199,6 +209,7 @@ func (this *GedView) Redo() {
 	if scene := this.GedScene(); scene != nil {
 		scene.NotifyDesignChanged()
 	}
+	this.refreshPropertyValues()
 	this.Self().Update()
 }
 
@@ -297,89 +308,60 @@ func (this *GedView) GridSize() float64 {
 }
 
 func (this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext) {
-	core.Debug("(this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext)")
-	//this.MapToScene(x, y)
-
-	if dnd.HasFormat("text/plain") {
-		dnd.SetAction(gui.DndCopy)
-	}
+	this.OnDragMove(x, y, dnd)
 }
 
 func (this *GedView) OnDragLeave() {
-	// The drag moved off the canvas — onto a sibling widget, or out of the
-	// window entirely. The highlight must go with it: dndDragOver leaves the
-	// canvas for good here and OnDragMove is not called again to correct it.
-	this.dropContainer = nil
-	this.Self().Update()
+	this.clearPaletteDrop()
 }
 
 func (this *GedView) OnDragMove(x, y float64, dnd gui.IDndContext) {
-	if !dnd.HasFormat("text/plain") {
-		dnd.SetAction(gui.DndIgnore)
-		// A drag we refuse may still be over a container we highlighted while
-		// an earlier, acceptable payload was in flight.
-		this.dropContainer = nil
-		this.Self().Update()
-		return
+	this.paletteDrop = this.resolvePaletteDrop(x, y, dnd)
+	this.dropContainer = this.paletteDrop.container
+	dnd.SetAction(gui.DndIgnore)
+	if this.paletteDrop.valid {
+		dnd.SetAction(gui.DndCopy)
 	}
-	dnd.SetAction(gui.DndCopy)
-
-	// Outline the container the release would nest into, so the palette drop
-	// gets the same feedback a canvas drag does. containerUnder is the resolver
-	// OnDrop picks the parent with: sharing it is what keeps the outline from
-	// promising a parent the drop then disagrees with. (nearestDropContainer is
-	// not interchangeable — its `moving` predicate exists for canvas drags,
-	// where the dragged items are excluded from their own drop target.)
-	sx, sy := this.MapToScene(x, y)
-	this.dropContainer = this.containerUnder(sx, sy)
 	this.Self().Update()
 }
 
 func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
-	factoryName, ok := dnd.Data("text/plain").(string)
-	if !ok {
-		dnd.SetAction(gui.DndIgnore)
+	// Resolve again on release; a stale hover must never promise a different
+	// parent, placement or acceptance from the actual drop.
+	placement := this.resolvePaletteDrop(x, y, dnd)
+	dnd.SetAction(gui.DndIgnore)
+	defer this.clearPaletteDrop()
+	if !placement.valid {
 		return
 	}
-	item, err := NewFakeWidgetFromFactory(factoryName)
+	item, err := NewFakeWidgetFromFactory(placement.factoryName)
 	if err != nil {
-		gui.ShowMessageBox(this, gui.LoadIcon("error"), "failed", err.Error(), []string{"@ok"})
+		core.Warn("palette drop: ", err)
 		return
 	}
-	sx, sy := this.MapToScene(x, y)
-	x1, y1 := this.snapToGrid(sx, sy)
 
-	// Use type-specific default sizes instead of a fixed 30x8 mm
-	w, h := defaultSizeForWidget(factoryName)
-	item.SetBounds(x1, y1, w, h)
-
-	// Call Layout so the embedded widget gets the correct pixel size
-	item.Layout()
-
-	// Nest the new widget into the container under the cursor, so layouts can
-	// be built by drag-drop; fall back to the scene root when the drop is not
-	// over a container. AddCommand attaches the fresh (parentless) item to any
-	// parent — Redo does SetParent(parent), Undo does SetParent(nil) — so the
-	// drop is one undoable action whether it lands in a container or at root.
-	parent := graph.IItem(this.Scene())
-	if c := this.containerUnder(sx, sy); c != nil {
-		parent = c
+	// Bounds are planned in scene coordinates. New items have no parent yet,
+	// so explicitly convert for a parent that establishes a local space.
+	x1, y1 := placement.bounds.X, placement.bounds.Y
+	dx, dy := placement.parent.CoordOffset()
+	if placement.parent.HasLocalCoord() {
+		dx += placement.parent.X()
+		dy += placement.parent.Y()
 	}
-	cmd := graph.NewAddCommand()
-	cmd.AddItem(item, parent)
-	this.Scene().PushCommand(cmd)
+	item.SetBounds(x1-dx, y1-dy, placement.bounds.Width, placement.bounds.Height)
+	item.Layout()
+	if parent, ok := placement.parent.(*FakeWidget); ok && parent.layoutManaged {
+		item.layoutCell = appendPaletteLayoutCell(parent)
+	}
 
-	// Claim the drop. Both backends offer it to the widget under the cursor and
-	// then to its ancestors, stopping at the first one that sets an action, so a
-	// canvas that stays on DndIgnore reads as a refusal: the drop it already
-	// consumed would be handed on to the enclosing Dock and Frame, and the
-	// palette would be told DndIgnore.
+	add := graph.NewAddCommand()
+	add.AddItem(item, placement.parent)
+	this.Scene().PushCommand(&paletteAddCommand{
+		add: add, selection: this.Selection(), item: item, parent: placement.parent,
+		previous: this.Selection().ItemList(),
+	})
 	dnd.SetAction(gui.DndCopy)
-
-	// The drag is over: the container that was outlined has become the new
-	// widget's parent, and nothing is being dragged towards it any more.
-	this.dropContainer = nil
-	this.Self().Update()
+	this.SetFocus()
 }
 
 // containerUnder returns the nearest container FakeWidget at the scene point
@@ -567,10 +549,17 @@ func eventsForItem(item graph.IItem) []string {
 
 // OnRightUp shows a context menu when the user right-clicks on the canvas.
 func (this *GedView) OnRightUp(x, y float64) {
+	menu := this.buildContextMenu(x, y)
+	gx, gy := this.MapToGlobal(x, y)
+	menu.ShowAsPopup(gx, gy, true)
+}
+
+func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 	sx, sy := this.MapToScene(x, y)
 	item := this.Scene().FindItemAt(sx, sy, nil)
 
 	menu := gui.NewMenu(true)
+	menu.SetParent(this)
 
 	if item != nil && item != this.Scene() {
 		// Select the item if not already selected
@@ -609,8 +598,7 @@ func (this *GedView) OnRightUp(x, y float64) {
 					})
 				}
 			} else {
-				noEvt := eventMenu.AddButton1("(无可用事件)", nil)
-				_ = noEvt
+				eventMenu.AddButton1("(无可用事件)", nil).SetEnabled(false)
 			}
 
 			// Add "Remove Binding" option if there are active bindings
@@ -629,7 +617,7 @@ func (this *GedView) OnRightUp(x, y float64) {
 			// A non-widget item has no generated code, so no event of it can
 			// be bound. The old fallback listed four generic names here that
 			// codegen could never emit for anything.
-			eventMenu.AddButton1("(无可用事件)", nil)
+			eventMenu.AddButton1("(无可用事件)", nil).SetEnabled(false)
 		}
 
 		// "变形为" submenu — retype this widget in place. Single-selection
@@ -653,7 +641,9 @@ func (this *GedView) OnRightUp(x, y float64) {
 		btnCode.Action().BindFunc0(func() {
 			this.Selection().Clear()
 			this.Selection().Add(item)
+			this.requestCodePanel()
 		})
+		btnCode.SetEnabled(isFake)
 
 		menu.AddSeparator()
 
@@ -709,24 +699,34 @@ func (this *GedView) OnRightUp(x, y float64) {
 		aMenu.AddButton1("垂直分布", nil).Action().BindFunc0(func() {
 			this.AlignSelection(DistributeV)
 		})
+		this.gateContextAlignment(aMenu)
 
 		// "Lay Out" — wrap the current multi-selection in a VBox/HBox
 		// container so the generated code arranges them via the layout
 		// (Qt Designer's "Lay Out Vertically/Horizontally"). No-ops below
 		// 2 selected items.
 		lMenu, _ := menu.AddSubMenu("布局", nil, nil)
-		lMenu.AddButton1("垂直布局 (VBox)", nil).Action().BindFunc0(func() {
-			this.LayOutSelection(false)
-		})
-		lMenu.AddButton1("水平布局 (HBox)", nil).Action().BindFunc0(func() {
-			this.LayOutSelection(true)
-		})
+		for _, entry := range []struct {
+			label, icon string
+			kind        LayoutKind
+		}{
+			{"垂直布局 (VBox)", "layout-vertical", LayoutVertical},
+			{"水平布局 (HBox)", "layout-horizontal", LayoutHorizontal},
+			{"网格布局 (Grid)", "layout-grid", LayoutGrid},
+			{"表单布局 (Form)", "layout-form", LayoutForm},
+		} {
+			btn := lMenu.AddButton1(entry.label, paint.LoadIcon(entry.icon))
+			btn.Action().SetEnabled(this.CanLayoutSelection(entry.kind))
+			btn.Action().BindFunc0(func() { this.LayoutSelection(entry.kind) })
+		}
 		lMenu.AddSeparator()
 		// "Break Layout" — the inverse of Lay Out: dissolve the selected
 		// container(s), lifting their children back up to the container's
 		// parent (Qt Designer's "Break Layout"). No-op when no selected
 		// item is a container with children.
-		lMenu.AddButton1("解散布局 (Break)", nil).Action().BindFunc0(func() {
+		breakBtn := lMenu.AddButton1("解散布局 (Break)", paint.LoadIcon("layout-break"))
+		breakBtn.Action().SetEnabled(this.CanBreakLayout())
+		breakBtn.Action().BindFunc0(func() {
 			this.BreakLayoutSelection()
 		})
 
@@ -788,9 +788,7 @@ func (this *GedView) OnRightUp(x, y float64) {
 		})
 	}
 
-	// Show popup menu at click position
-	gx, gy := this.MapToGlobal(x, y)
-	menu.ShowAsPopup(gx, gy, true)
+	return menu
 }
 
 // showPropertyDialog displays a property dialog for the selected item.
@@ -803,6 +801,9 @@ func (this *GedView) showPropertyDialog(obj interface{}) {
 			this.Selection().Clear()
 			this.Selection().Add(item)
 		}
+	}
+	if this.showPropertiesPanel != nil {
+		this.showPropertiesPanel()
 	}
 }
 
@@ -1570,89 +1571,11 @@ func boundingBoxOf(rects []geom.Rect) geom.Rect {
 // is also how the 布局 menu tells an applied layout from a declined one.
 // No-op below 2 selected items.
 func (this *GedView) LayOutSelection(horizontal bool) {
-	raw := this.Selection().ItemList()
-
-	// Guard the selection before reparenting anything:
-	//   - the scene/page root must never be reparented (would orphan the
-	//     whole design),
-	//   - position-locked items are immutable (consistent with align/nudge),
-	//   - an item whose ancestor is ALSO selected is dropped, so selecting a
-	//     container together with one of its own children lays out only the
-	//     container (no double-move / surprising re-nesting).
-	// selSet holds only the selected *widget* items (not the scene root):
-	// a child is suppressed when a selected CONTAINER ancestor is also in
-	// the layout, but the scene being in the selection must not suppress
-	// everything under it.
-	selSet := make(map[graph.IItem]bool, len(raw))
-	for _, it := range raw {
-		if _, ok := it.(*FakeWidget); ok {
-			selSet[it] = true
-		}
-	}
-	items := make([]graph.IItem, 0, len(raw))
-	for _, it := range raw {
-		// Only real designer widgets are layout-eligible. This excludes
-		// the scene/page root (a *GedScene, never a *FakeWidget) without
-		// relying on identity comparison.
-		if _, ok := it.(*FakeWidget); !ok {
-			continue
-		}
-		if it.IsLockPos() { // position-locked widgets are immutable
-			continue
-		}
-		if hasSelectedAncestor(it, selSet) {
-			continue
-		}
-		items = append(items, it)
-	}
-	if len(items) < 2 {
-		return
-	}
-
-	rects := make([]geom.Rect, len(items))
-	for i, it := range items {
-		rects[i] = it.Bounds1()
-	}
-	box := boundingBoxOf(rects)
-
-	factory := "gui.VBox"
 	if horizontal {
-		factory = "gui.HBox"
+		this.LayoutSelection(LayoutHorizontal)
+	} else {
+		this.LayoutSelection(LayoutVertical)
 	}
-	container, err := NewFakeWidgetFromFactory(factory)
-	if err != nil {
-		return
-	}
-	container.SetBounds1(box)
-
-	// Reparent in layout order: VBox stacks by Y, HBox by X.
-	ordered := make([]graph.IItem, len(items))
-	copy(ordered, items)
-	sort.SliceStable(ordered, func(a, b int) bool {
-		ra, rb := ordered[a].Bounds1(), ordered[b].Bounds1()
-		if horizontal {
-			return ra.X < rb.X
-		}
-		return ra.Y < rb.Y
-	})
-
-	// Build one undoable command: attach the container to the scene
-	// first, then move each selected item into it. Parents are captured
-	// now (pre-apply); PushCommand's Redo() applies the whole move, and
-	// Ctrl+Z unwinds it (items return to their old parents, container
-	// detaches).
-	cmd := graph.NewReparentCommand("Lay Out")
-	cmd.Add(container, nil, this.Scene())
-	for _, it := range ordered {
-		cmd.Add(it, it.Parent(), container)
-	}
-	this.Scene().PushCommand(cmd)
-	container.Layout()
-
-	sel := this.Selection()
-	sel.Clear()
-	sel.Add(container)
-	this.Self().Update()
 }
 
 // BreakLayoutSelection is the inverse of LayOutSelection: for every
@@ -1662,46 +1585,11 @@ func (this *GedView) LayOutSelection(horizontal bool) {
 // positions (containers use absolute coords in the canvas), so they
 // stay put visually. The freed children become the new selection.
 //
-// Only *FakeWidget items that actually hold children are affected;
+// Only unlocked designer-layout widgets that actually hold children are affected;
 // anything else in the selection is ignored, so the action is a no-op
 // when nothing container-like is selected — and a no-op pushes nothing.
 func (this *GedView) BreakLayoutSelection() {
-	raw := this.Selection().ItemList()
-	var freed []graph.IItem
-	// One undoable command for the whole break: per container, lift each
-	// child to the container's parent, then detach the container. Redo
-	// applies it; Ctrl+Z re-nests the children and restores the container.
-	cmd := graph.NewReparentCommand("Break Layout")
-	for _, it := range raw {
-		fake, ok := it.(*FakeWidget)
-		if !ok || !fake.HasChildren() {
-			continue
-		}
-		parent := fake.Parent()
-		if parent == nil {
-			continue
-		}
-		// Snapshot children before recording — building the command must
-		// read the current (pre-apply) tree.
-		kids := make([]graph.IItem, 0, len(fake.Children()))
-		kids = append(kids, fake.Children()...)
-		for _, c := range kids {
-			cmd.Add(c, fake, parent) // child: container -> container's parent
-			freed = append(freed, c)
-		}
-		cmd.Add(fake, parent, nil) // container: parent -> detached
-	}
-	if cmd.Count() == 0 {
-		return
-	}
-	this.Scene().PushCommand(cmd)
-
-	sel := this.Selection()
-	sel.Clear()
-	for _, c := range freed {
-		sel.Add(c)
-	}
-	this.Self().Update()
+	this.BreakLayout()
 }
 
 // renameTarget returns the widget F2 should rename: exactly one selected
@@ -1767,13 +1655,16 @@ func (this *GedView) OnLeftDown(x, y float64) {
 	lastClickX, lastClickY = x, y
 
 	this.SetFocus()
+	this.managedHint = paletteDropFeedback{}
+	this.managedPress = this.managedGeometryAt(x, y)
+	this.managedPressX, this.managedPressY = x, y
 	this.GraphView.OnLeftDown(x, y)
 
 	// Record drag origin in scene coordinates for alignment guide computation
 	sx, sy := this.MapToScene(x, y)
 	this.dragOriginX = sx
 	this.dragOriginY = sy
-	this.isDragging = true
+	this.isDragging = !this.managedPress
 	this.alignGuides = nil
 
 	// Both are (re)decided by OnMouseMove; a press that is never followed by
@@ -1807,9 +1698,7 @@ func (this *GedView) onDoubleClick(x, y float64) {
 	}
 
 	// Bring the code panel to the front so the user can see the handler code.
-	if ShowCodePanelCallback != nil {
-		ShowCodePanelCallback()
-	}
+	this.requestCodePanel()
 }
 
 // getWidgetText returns the text of a widget if it has a Text() method.
@@ -1851,7 +1740,12 @@ var keyDown = gui.IsKeyDown
 
 // OnKeyDown handles keyboard shortcuts for the GED editor.
 func (this *GedView) OnKeyDown(key int, repeat bool) {
-	ctrl := keyDown(gui.KeyCtrl)
+	if key == gui.KeyEsc && this.managedPress {
+		this.GraphView.OnLeftUp(this.managedPressX, this.managedPressY)
+		this.managedPress = false
+		this.managedHint = paletteDropFeedback{}
+	}
+	ctrl := designerActionKeyDown()
 	alt := keyDown(gui.KeyMenu)
 
 	// Space key enables pan mode
@@ -1922,15 +1816,18 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		dx, dy, _ := nudgeDelta(key, keyDown(gui.KeyShift), 1, this.coarseNudgeStep())
 		this.nudgeSelection(dx, dy)
 
+	case ctrl && keyDown(gui.KeyShift) && (key == 'Z' || key == 'z'):
+		this.Redo()
+
 	case ctrl && (key == 'Z' || key == 'z'):
 		this.Undo()
 
 	case ctrl && (key == 'Y' || key == 'y'):
 		this.Redo()
 
-	// Cmd/Ctrl+A: select every selectable widget on the page. Ctrl is read
-	// from IsKeyDown(KeyCtrl) up top (same modifier probe the nudge/undo cases
-	// use), so this only fires with the modifier held and never collides with a
+	// Cmd/Ctrl+A: select every selectable widget on the page. The platform
+	// action modifier is shared with copy/paste/duplicate and history, so this
+	// only fires with the modifier held and never collides with a
 	// bare 'A' typed into an inline editor. Consumed here, ahead of the Alt
 	// align block, so it can't fall through to anything else.
 	case ctrl && (key == 'A' || key == 'a'):
@@ -2195,6 +2092,10 @@ func nudgeDelta(key int, shift bool, step, gridStep float64) (dx, dy float64, ha
 // nil, which we forward as a quiet no-op rather than pushing an
 // empty command.
 func (this *GedView) nudgeSelection(dx, dy float64) {
+	if this.selectionHasManagedGeometry() {
+		this.showManagedGeometryHint(this.Width()/2, this.Height()/2)
+		return
+	}
 	cmd := this.Selection().GenerateMoveCommand(dx, dy)
 	if cmd == nil {
 		return
@@ -2214,6 +2115,10 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 // returns nil for all three, which we forward rather than pushing an empty
 // command.
 func (this *GedView) resizeSelection(dw, dh float64) {
+	if this.selectionHasManagedGeometry() {
+		this.showManagedGeometryHint(this.Width()/2, this.Height()/2)
+		return
+	}
 	cmd := this.Selection().GenerateResizeCommand(dw, dh, minWidgetSize)
 	if cmd == nil {
 		return
@@ -2657,7 +2562,7 @@ func (this *GedView) Draw(g paint.Painter) {
 	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
-	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil {
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid {
 		// Clip to the page area so neither the grid nor the guides bleed into
 		// the padding region, then re-enter scene-mm coordinate space (the
 		// same transform GraphView.Draw uses for the scene) so every overlay
@@ -2684,12 +2589,14 @@ func (this *GedView) Draw(g paint.Painter) {
 		}
 		this.drawAlignGuides(g)
 		this.drawDropContainer(g)
+		this.drawPaletteDropBounds(g)
 		g.Restore()
 	}
 
 	if this.showGuides {
 		this.drawRulers(g)
 	}
+	this.drawPaletteDropHint(g)
 }
 
 // drawDropContainer outlines the container the current drag would nest into.
@@ -2718,6 +2625,16 @@ func (this *GedView) drawDropContainer(g paint.Painter) {
 // OnMouseMove overrides GraphView.OnMouseMove to compute alignment guides
 // while dragging selected items.
 func (this *GedView) OnMouseMove(x, y float64) {
+	if this.managedPress {
+		if math.Abs(x-this.managedPressX) > 1 || math.Abs(y-this.managedPressY) > 1 {
+			this.showManagedGeometryHint(x, y)
+		}
+		return
+	}
+	if this.managedHint.active {
+		this.managedHint = paletteDropFeedback{}
+		this.Self().Update()
+	}
 	// Space+Drag pan: adjust scroll offset
 	if this.isPanning {
 		dx := x - this.panStartX
@@ -2740,7 +2657,7 @@ func (this *GedView) OnMouseMove(x, y float64) {
 	if !this.isDragging {
 		sx, sy := this.MapToScene(x, y)
 		decor, handle := this.FindHandleAt(sx, sy)
-		if decor != nil && handle != 0 {
+		if decor != nil && handle != 0 && !managedGeometryItem(decor.Item()) {
 			gui.SetOverrideCursor(decor.HandleCursor(handle))
 		} else {
 			gui.SetOverrideCursor(nil)
@@ -2781,8 +2698,11 @@ func (this *GedView) OnMouseMove(x, y float64) {
 		this.dragMovesItems = false
 		return
 	}
-	this.dragMovesItems = this.Scene().FindItemAt(this.dragOriginX, this.dragOriginY,
-		graph.TraversalCond_SelectableAndMoveable) != nil
+	hit := this.Scene().FindItemAt(this.dragOriginX, this.dragOriginY,
+		graph.TraversalCond_SelectableAndMoveable)
+	// Match MovePart: the selectable form root is still only the background
+	// for a body drag, and must not turn a marquee into a move/re-parent.
+	this.dragMovesItems = hit != nil && hit != this.Scene()
 	if this.dragMovesItems {
 		this.dropContainer = nearestDropContainer(
 			this.Scene().FindItemAt(sx, sy, nil), sel.Contains)
@@ -2792,6 +2712,19 @@ func (this *GedView) OnMouseMove(x, y float64) {
 // OnLeftUp overrides GraphView.OnLeftUp to clear alignment guides when
 // the drag ends.
 func (this *GedView) OnLeftUp(x, y float64) {
+	if this.managedPress {
+		// The graph tool only saw a press, never a drag. Release at that press
+		// point to preserve normal click selection without committing geometry.
+		this.GraphView.OnLeftUp(this.managedPressX, this.managedPressY)
+		this.managedPress = false
+		this.isDragging = false
+		this.alignGuides = nil
+		this.dropContainer = nil
+		this.dragMovesItems = false
+		this.refreshPropertyValues()
+		this.Self().Update()
+		return
+	}
 	// End Space+Drag pan
 	if this.isPanning {
 		this.isPanning = false
@@ -2809,7 +2742,14 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// DecorPart commits the resize and drops the moving flag it is asking about.
 	target, movesItems := this.dropContainer, this.dragMovesItems
 	resized := this.resizeGestureItem()
+	stack := this.Scene().UndoStack()
+	historyBefore := stack.Current()
 	this.GraphView.OnLeftUp(x, y)
+	// isDragging starts at mouse-down, so it alone also describes a click,
+	// sub-threshold jitter or marquee. Mouse move/resize commands do not merge:
+	// only a geometry command actually committed by the graph tool may be
+	// tidied by the snap, never newly selected widgets from a selection gesture.
+	geometryCommitted := stack.Current() != historyBefore && (movesItems || resized != nil)
 	this.isDragging = false
 	this.alignGuides = nil
 	this.dropContainer = nil
@@ -2821,7 +2761,7 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// MovePart we don't own) so the final resting position lands on the
 	// grid. The align guides drawn during the drag are purely visual and
 	// don't move the widget, so grid snap and the guides compose cleanly.
-	if wasDragging {
+	if wasDragging && geometryCommitted {
 		this.snapSelectionToGrid()
 		// The size snap answers to the resize gesture alone. Every other canvas
 		// gesture ends here too — a selection click, a click on empty canvas
@@ -2852,6 +2792,7 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		}
 	}
 
+	this.refreshPropertyValues()
 	this.Self().Update()
 }
 
@@ -3049,5 +2990,12 @@ func (this *GedView) snapSelectionSizeToGrid(dragged graph.IItem) {
 		if nw != w || nh != h {
 			item.SetSize(nw, nh)
 		}
+	}
+}
+
+// Older/custom property panels can omit this optional refresh capability.
+func (this *GedView) refreshPropertyValues() {
+	if panel, ok := this.GetPropertyView().(interface{ RefreshValues() }); ok {
+		panel.RefreshValues()
 	}
 }

@@ -25,13 +25,15 @@ const (
 type Dialog struct {
 	Form
 	contentWidget IWidget
-	btnBox        *ButtonBox
+	btnBox        *dialogButtonBar
 	result        DialogResult
 	buttons       []*Button
 	resultMap     map[string]DialogResult
 	closed        bool
 	defaultBtn    *Button      // 默认按钮(回车触发), nil 时按隐式规则推断
 	cancelResult  DialogResult // Esc 关闭对话框返回的结果, 默认 DialogCancel
+	preferredW    float64
+	preferredH    float64
 }
 
 // NewDialog creates a new Dialog with the given title and parent widget.
@@ -55,7 +57,9 @@ func (this *Dialog) Init(iw IWidget) {
 	this.resultMap = make(map[string]DialogResult)
 	this.cancelResult = DialogCancel
 
-	this.btnBox = NewButtonBox()
+	this.btnBox = new(dialogButtonBar)
+	this.btnBox.Init(this.btnBox)
+	this.btnBox.SetFocusPolicy(NoFocus)
 	this.btnBox.SetParent(iw)
 	this.btnBox.SigSubmit(this.onBtnClick)
 }
@@ -115,7 +119,8 @@ func (this *Dialog) ShowModal() DialogResult {
 	this.AttachWindow(WtForm)
 
 	w, h := this.dialogSize()
-	this.SetBounds(this.x, this.y, w, h)
+	// Applying the computed size is not a new caller preference.
+	this.Form.SetBounds(this.x, this.y, w, h)
 
 	win := this.Window()
 	if win == nil {
@@ -138,9 +143,21 @@ func (this *Dialog) Result() DialogResult {
 	return this.result
 }
 
+// SetSize records the requested modal size. ShowModal must not silently replace
+// a caller's explicit size with the content's (often much smaller) natural size.
+func (this *Dialog) SetSize(w, h float64) {
+	this.preferredW, this.preferredH = w, h
+	this.Form.SetSize(w, h)
+}
+
+func (this *Dialog) SetBounds(x, y, w, h float64) {
+	this.preferredW, this.preferredH = w, h
+	this.Form.SetBounds(x, y, w, h)
+}
+
 func (this *Dialog) dialogSize() (w, h float64) {
 	w, h = 380, 160
-	btnBarH := 44.0
+	btnBarH := dialogButtonBarHeight
 	padSide := 24.0
 	padTopBot := 20.0
 
@@ -157,6 +174,15 @@ func (this *Dialog) dialogSize() (w, h float64) {
 	}
 	if h > 500 {
 		h = 500
+	}
+	if this.preferredW > 0 {
+		w = math.Max(380, this.preferredW)
+	}
+	if this.preferredH > 0 {
+		h = math.Max(160, this.preferredH)
+	}
+	if this.btnBox != nil {
+		w = math.Max(w, this.btnBox.requiredWidth())
 	}
 	return
 }
@@ -259,15 +285,15 @@ func (this *Dialog) EnumProperties(list core.IPropertyList) {
 
 // Layout arranges the content area on top and the button bar at the bottom.
 func (this *Dialog) Layout() {
-	btnBarH := 44.0
+	btnBarH := dialogButtonBarHeight
 	padSide := 24.0
 	padTop := 20.0
 
 	if this.btnBox != nil {
-		this.btnBox.SetBounds(0, this.h-btnBarH, this.w, btnBarH)
+		this.btnBox.SetBounds(0, math.Max(0, this.h-btnBarH), math.Max(0, this.w), math.Min(this.h, btnBarH))
 	}
 	if this.contentWidget != nil {
-		this.contentWidget.SetBounds(padSide, padTop, this.w-padSide*2, this.h-padTop-btnBarH)
+		this.contentWidget.SetBounds(padSide, padTop, math.Max(0, this.w-padSide*2), math.Max(0, this.h-padTop-btnBarH-16))
 	}
 }
 
@@ -275,7 +301,7 @@ func (this *Dialog) Layout() {
 func (this *Dialog) Draw(g paint.Painter) {
 	t := Theme()
 	w, h := this.Width(), this.Height()
-	btnBarH := 44.0
+	btnBarH := dialogButtonBarHeight
 
 	// Content background (theme-aware for dark mode)
 	g.Rectangle(0, 0, w, h)

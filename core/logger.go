@@ -97,7 +97,18 @@ func closeLogOut() {
 	closeWriter(logOut)
 	logOut = nil
 
-	log.SetOutput(os.Stdout)
+	log.SetOutput(os.Stderr)
+}
+
+// Importing the SDK must not mix diagnostics with a CLI's stdout protocol
+// (silkgen emits Go source there). Keep the public SetLogOutput fork behavior
+// unchanged, but mirror automatic startup logging to stderr.
+func setStartupLogFile(filename string) error {
+	of, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return SetLogOutput(&forkWriter{os.Stderr, of}, false)
 }
 
 // 设置log输出目标, 参见 SetLogOutput
@@ -119,6 +130,7 @@ func SetLogOutput(of io.Writer, forkToStd bool) (err error) {
 	}
 
 	closeLogOut()
+	logOut = of
 
 	p := new(stWriter)
 	p.o = of

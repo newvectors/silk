@@ -447,7 +447,6 @@ Outer:
 			}
 		case '=':
 			break Outer
-			break
 		case 0:
 			return buf.String()
 		default:
@@ -934,8 +933,6 @@ func tdocMarshalV(v reflect.Value) (*TDoc, error) {
 		//doc.SetKey(keyName(v.Type().Name()))
 		return doc, err
 	}
-
-	panic("")
 }
 
 // 把对象编码成TDoc

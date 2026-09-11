@@ -16,20 +16,25 @@ var longAppName string
 // 此函数检测接口是否良构, 如果接口非nil且含有空值则panic
 // 此函数只在Debug版检测, Release版不检测
 // 注: 在我们的架构里, 空值存放在接口里是非法的,
-//     因为此时接口不为nil, 而指针却为nil, 容易引起混乱.
+//
+//	因为此时接口不为nil, 而指针却为nil, 容易引起混乱.
+//
 // 非法的例子:
-//     func NewInt() interface{} {
-//        var p *int = nil
-//        return p // 危险! 把空指针赋值给接口
-//     }
+//
+//	func NewInt() interface{} {
+//	   var p *int = nil
+//	   return p // 危险! 把空指针赋值给接口
+//	}
+//
 // 合法的例子:
-//     func NewInt() interface{} {
-//        var p *int = nil
-//        if p == nil {
-//            return nil // 正确
-//        }
-//        return p // 正确, 此处不会返回空指针
-//     }
+//
+//	func NewInt() interface{} {
+//	   var p *int = nil
+//	   if p == nil {
+//	       return nil // 正确
+//	   }
+//	   return p // 正确, 此处不会返回空指针
+//	}
 func CheckIface(pi *interface{}) {
 	if isDebugOn && *pi != nil {
 		v := reflect.ValueOf(*pi)
@@ -46,10 +51,13 @@ func CheckIface(pi *interface{}) {
 
 // 判断接口本身或接口的值是否为nil
 // 注: 在我们的架构里, 空值存放在接口里是非法的,
-//     因为此时接口不为nil, 而指针却为nil, 容易引起混乱.
+//
+//	因为此时接口不为nil, 而指针却为nil, 容易引起混乱.
+//
 // 此函数和reflect.IsNil()的区别是:
-//   1 此函数也判断接口是否为nil
-//   2 在参数类型不可能为nil时, 此函数不paninc, 而是返回true
+//
+//	1 此函数也判断接口是否为nil
+//	2 在参数类型不可能为nil时, 此函数不paninc, 而是返回true
 func IsNil(i interface{}) bool {
 	if i == nil {
 		return true
@@ -210,11 +218,17 @@ func init() {
 	//Trace("err=", err)
 	previousAbort = err == nil
 	file, err := os.Create(lockFilePath)
-	if err != nil {
-		file.Close()
+	if err == nil {
+		if err := file.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "silk: close run marker:", err)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "silk: create run marker:", err)
 	}
 
-	SetLogOutputFile(LocalDataDir()+"/"+ExeFileBaseName(false)+".log", true)
+	if err := setStartupLogFile(LocalDataDir() + "/" + ExeFileBaseName(false) + ".log"); err != nil {
+		fmt.Fprintln(os.Stderr, "silk: open log file:", err)
+	}
 
 	if previousAbort {
 		Log("Warning: 检测到程序上次运行时异常退出, 是否忘记core.Close()?")
@@ -477,4 +491,12 @@ func Close() {
 	closeLogOut()
 	lockFilePath := LocalDataDir() + "/_" + ExeFileBaseName(true) + "_.runlock"
 	os.Remove(lockFilePath)
+	// TempDir creates a private directory owned by this process. Remove it
+	// only after all exit routines have had their chance to flush/consume
+	// temporary files. Never remove configured or shared data directories.
+	if tmpDir != "" {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintln(os.Stderr, "silk: remove temporary directory:", err)
+		}
+	}
 }

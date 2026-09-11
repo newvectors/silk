@@ -106,6 +106,7 @@ func (this *DropdownButton) showDropdown() {
 	}
 
 	menu := NewPopupMenu()
+	menu.SetParent(this)
 	for i, item := range this.items {
 		idx := i
 		txt := item.Text

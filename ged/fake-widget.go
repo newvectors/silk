@@ -216,10 +216,12 @@ type FakeWidget struct {
 	code          string // Go source code for event handlers
 
 	// Pixmap caching fields – avoids recreating the offscreen surface every frame
-	cachedPixmap paint.Pixmap
-	pixmapDirty  bool
-	cachedW      int
-	cachedH      int
+	cachedPixmap  paint.Pixmap
+	pixmapDirty   bool
+	cachedW       int
+	cachedH       int
+	layoutManaged bool
+	layoutCell    layoutPlacement
 }
 
 func NewFakeWidget() *FakeWidget {
@@ -457,6 +459,7 @@ func (this *FakeWidget) Layout() {
 	if layouter, ok := this.widget.(interface{ Layout() }); ok {
 		layouter.Layout()
 	}
+	this.layoutDesignChildren()
 	this.MarkDirty()
 }
 
@@ -528,6 +531,7 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 	doc.SetValue(this.factoryName)
 	doc.WriteAttr("bounds", this.Bounds1())
 	doc.WriteAttr("name", this.WidgetName())
+	this.saveLayout(doc)
 	// Persist lock state. One attribute per flag: they are set independently
 	// from the canvas, and the single "locked" attribute this used to write
 	// could only record the both-locked case, so a position-only lock was
@@ -649,6 +653,7 @@ func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
 // It never fails on an unknown child factory (see loadChildWidgets), so a
 // partially valid design still loads its valid widgets.
 func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *[]string) {
+	this.loadLayout(doc)
 	var rect geom.Rect
 	doc.ReadAttr("bounds", &rect)
 	this.SetBounds1(rect)
@@ -707,16 +712,18 @@ func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *[]string) {
 	// shared loader, which skips unknown-factory subtrees instead of
 	// aborting and recurses for arbitrarily deep container nesting.
 	loadChildWidgets(doc.ChildByKey("children", false), this, skipped)
+	this.Layout()
 }
 
 func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 	list.AddProperty("控件名称", this.WidgetName, this.SetWidgetName)
 	list.AddProperty("控件类型", this.WidgetFactoryName, nil)
-	list.AddProperty("X 位置 (mm)", this.X, this.SetX)
-	list.AddProperty("Y 位置 (mm)", this.Y, this.SetY)
+	list.AddProperty("X 位置 (mm)", this.X, this.setDesignX)
+	list.AddProperty("Y 位置 (mm)", this.Y, this.setDesignY)
 	list.AddProperty("宽度 (mm)", this.Width, this.SetWidth)
 	list.AddProperty("高度 (mm)", this.Height, this.SetHeight)
 	list.AddProperty("锁定", this.IsLocked, this.SetLocked)
+	this.enumLayoutPlacementProperties(list)
 
 	// Also enumerate the embedded widget's properties so the property sheet
 	// shows widget-specific fields (text, checked, value, etc.). The
@@ -724,7 +731,7 @@ func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 	// values in the sheet repaints the designer preview.
 	if this.widget != nil {
 		if ep, ok := this.widget.(core.IEnumProperties); ok {
-			ep.EnumProperties(newMarkDirtyPropertyList(list, this.MarkDirty))
+			ep.EnumProperties(newMarkDirtyPropertyList(list, this.designPropertyChanged))
 		}
 	}
 
@@ -759,10 +766,14 @@ func (this *FakeWidget) Generate() gui.IWidget {
 			}
 		}
 	}
-	x := gui.MmToPixelZ(this.X())
-	y := gui.MmToPixelZ(this.Y())
+	localX, localY := runtimePosition(this)
+	x := gui.MmToPixelZ(localX)
+	y := gui.MmToPixelZ(localY)
 	w := gui.MmToPixelZ(this.Width())
 	h := gui.MmToPixelZ(this.Height())
+	if manager, ok := fake.widget.(interface{ SetLayoutEnabled(bool) }); ok {
+		manager.SetLayoutEnabled(this.layoutManaged)
+	}
 	fake.widget.SetBounds(x, y, w, h)
 
 	// Recurse into nested children so the live preview matches the
@@ -772,8 +783,8 @@ func (this *FakeWidget) Generate() gui.IWidget {
 	// and keep their absolute bounds. Without this the preview showed an
 	// empty container while the emitted source had its children.
 	adder, hasAdd := fake.widget.(interface{ AddWidget(gui.IWidget) })
-	useAdd := hasAdd && isSimpleAddContainer(this.factoryName)
-	for _, c := range this.Children() {
+	useAdd := hasAdd && isSimpleAddContainer(this.factoryName) && (!isDesignerLayoutFactory(this.factoryName) || this.layoutManaged)
+	for childIndex, c := range this.Children() {
 		cf, ok := c.(*FakeWidget)
 		if !ok {
 			continue
@@ -782,11 +793,17 @@ func (this *FakeWidget) Generate() gui.IWidget {
 		if cw == nil {
 			continue
 		}
-		if useAdd {
+		if layoutAdder, ok := fake.widget.(layoutWidgetAdder); ok && this.layoutManaged {
+			p := this.childPlacement(cf, childIndex)
+			layoutAdder.AddLayoutWidget(cw, p.Row, p.Column, p.RowSpan, p.ColumnSpan)
+		} else if useAdd {
 			adder.AddWidget(cw)
 		} else {
 			cw.SetParent(fake.widget)
 		}
+	}
+	if layout, ok := fake.widget.(interface{ Layout() }); ok {
+		layout.Layout()
 	}
 	return fake.widget
 }

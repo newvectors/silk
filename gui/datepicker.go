@@ -98,8 +98,15 @@ func (this *DatePicker) SetDate(year, month, day int) {
 // Format returns the display format string.
 func (this *DatePicker) Format() string { return this.format }
 
-// SetFormat sets the display format string.
+// SetFormat sets a Go time layout (for example "02/01/2006"). An empty
+// layout restores the default ISO date format.
 func (this *DatePicker) SetFormat(f string) {
+	if f == "" {
+		f = "2006-01-02"
+	}
+	if this.format == f {
+		return
+	}
 	this.format = f
 	this.Self().Update()
 }
@@ -111,7 +118,7 @@ func (this *DatePicker) SigDateChanged(fn func(year, month, day int)) {
 
 func (this *DatePicker) displayText() string {
 	y, m, d := this.date()
-	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
+	return time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC).Format(this.format)
 }
 
 // --- Drawing ---
@@ -120,20 +127,22 @@ func (this *DatePicker) Draw(g paint.Painter) {
 	t := Theme()
 	w, h := this.Size()
 
-	// Background
-	g.Rectangle(0, 0, w, h)
-	if this.pushed {
-		g.SetBrush1(paint.Color{220, 220, 220, 255})
-	} else if this.IsHover() {
-		g.SetBrush1(paint.Color{235, 235, 235, 255})
-	} else {
-		g.SetBrush1(paint.Color{245, 245, 245, 255})
+	// Keep the field ink and surface paired in both themes. Pressed and
+	// hovered fields share the subtle hover wash; the border marks pressing.
+	bg, border := t.ViewBGColor, t.BorderColor
+	if this.pushed || this.IsHover() {
+		bg, border = t.ButtonHoverBGColor, t.ButtonHoverBorderColor
 	}
+	if this.pushed {
+		border = paint.CurrentIconPalette().Accent
+	}
+	g.Rectangle(0, 0, w, h)
+	g.SetBrush1(bg)
 	g.Fill()
 
 	// Border
 	g.Rectangle(0, 0, w, h)
-	g.SetPen1(t.BorderColor, 1)
+	g.SetPen1(border, 1)
 	g.Stroke()
 
 	// Text
@@ -167,6 +176,9 @@ func (this *DatePicker) OnMouseEnter() { this.Self().Update() }
 func (this *DatePicker) OnMouseLeave() { this.Self().Update() }
 
 func (this *DatePicker) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	this.SetFocus()
 	this.pushed = true
 	this.Self().Update()
@@ -197,6 +209,7 @@ func (this *DatePicker) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("Year", this.Year, func(v int) { this.SetDate(v, this.Month(), this.Day()) })
 	list.AddProperty("Month", this.Month, func(v int) { this.SetDate(this.Year(), v, this.Day()) })
 	list.AddProperty("Day", this.Day, func(v int) { this.SetDate(this.Year(), this.Month(), v) })
+	list.AddProperty("Format", this.Format, this.SetFormat)
 }
 
 // --- Calendar Popup ---
@@ -212,6 +225,9 @@ type dateCalendarPopup struct {
 func newDateCalendarPopup(owner *DatePicker) *dateCalendarPopup {
 	p := new(dateCalendarPopup)
 	p.Init(p)
+	// A popup must stay hidden until its native size and screen placement
+	// are ready; attaching a default-visible Widget would show it too early.
+	p.SetVisible(false)
 	p.owner = owner
 	p.viewYear = owner.Year()
 	p.viewMonth = owner.Month()
@@ -230,14 +246,16 @@ const (
 )
 
 func (this *dateCalendarPopup) ShowAsPopup(xg, yg float64) {
-	this.AttachWindow(WtPopup)
-	if w := this.Window(); w != nil {
-		w.SetCloseOnHide(true)
-	}
+	this.SetVisible(false)
 	w := calCellW*calCols + 8
 	h := calHeaderH + calDayRowH + calCellH*calRows + 8
-	this.SetSize(0, 0)
 	this.SetSize(w, h)
+	this.AttachWindow(WtPopup)
+	win := this.Window()
+	if win == nil {
+		return
+	}
+	win.SetCloseOnHide(true)
 	LayoutPopup1(this.Self(), xg, yg)
 	this.SetVisible(true)
 	this.PushCapture()
@@ -245,11 +263,12 @@ func (this *dateCalendarPopup) ShowAsPopup(xg, yg float64) {
 
 func (this *dateCalendarPopup) Draw(g paint.Painter) {
 	t := Theme()
+	selectedBG, selectedText := dateSelectionColors(t)
 	w, h := this.Size()
 
 	// Background
 	g.Rectangle(0, 0, w, h)
-	g.SetBrush1(paint.Color{255, 255, 255, 255})
+	g.SetBrush1(t.ViewBGColor)
 	g.FillPreserve()
 	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
@@ -289,7 +308,7 @@ func (this *dateCalendarPopup) Draw(g paint.Painter) {
 		dx := 4 + float64(i)*calCellW + calCellW*0.5
 		dy := calHeaderH + 0.5*(calDayRowH+fe.Ascent-fe.Descent)
 		dext := t.Font.TextExtents(name)
-		g.SetBrush1(paint.Color{120, 120, 120, 255})
+		g.SetBrush1(t.TabTextColor)
 		tx := dx - dext.Width*0.5 - dext.XBearing
 		ty := dy - fe.Ascent + fe.Descent
 		ty = calHeaderH + 0.5*(calDayRowH+dext.YBearing) - dext.YBearing
@@ -322,11 +341,11 @@ func (this *dateCalendarPopup) Draw(g paint.Painter) {
 			// Highlight selected day
 			if day == selectedDay {
 				g.Rectangle(cx, cy, calCellW, calCellH)
-				g.SetBrush1(t.HighLightColor)
+				g.SetBrush1(selectedBG)
 				g.Fill()
 			} else if day == this.hoverDay {
 				g.Rectangle(cx, cy, calCellW, calCellH)
-				g.SetBrush1(paint.Color{230, 230, 245, 255})
+				g.SetBrush1(t.ButtonHoverBGColor)
 				g.Fill()
 			}
 
@@ -337,7 +356,7 @@ func (this *dateCalendarPopup) Draw(g paint.Painter) {
 			dy := cy + 0.5*(calCellH+dext.YBearing) - dext.YBearing
 
 			if day == selectedDay {
-				g.SetBrush1(paint.Color{255, 255, 255, 255})
+				g.SetBrush1(selectedText)
 			} else {
 				g.SetBrush1(t.TextColor)
 			}

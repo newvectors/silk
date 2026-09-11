@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"github.com/uk0/silk/paint"
 	"math"
 	"testing"
 )
@@ -304,7 +305,10 @@ func TestToolBarChevronMenuTriggersTheOriginalActions(t *testing.T) {
 	// build, the positioning — is the production code path.
 	var shown *Menu
 	saved := showToolBarPopup
-	showToolBarPopup = func(menu *Menu, xg, yg float64) { shown = menu }
+	showToolBarPopup = func(menu *Menu, xg, yg float64) {
+		menu.setVisible(true) // Model the successful native Show step too.
+		shown = menu
+	}
 	t.Cleanup(func() { showToolBarPopup = saved })
 
 	tb.overflowButton().OnKeyDown(KeyEnter, false)
@@ -337,6 +341,175 @@ func TestToolBarChevronMenuTriggersTheOriginalActions(t *testing.T) {
 	for i, n := range fired {
 		if i != want && n != 0 {
 			t.Errorf("menu entry %q also fired %q's action %d time(s)", target, toolBarLabels[i], n)
+		}
+	}
+}
+
+func TestToolBarMeasuresOnlyVisibleButtonText(t *testing.T) {
+	tb := NewToolBar()
+	icon := LoadIcon("document-save")
+	iconOnly := tb.AddAction("", icon, func() {})
+	hiddenText := tb.AddAction("Very long descriptive action which belongs only in its tooltip", icon, func() {})
+	if hiddenText.IsTextVisible() {
+		t.Fatal("fixture did not hide action text")
+	}
+	short, hidden := tb.itemSizeHints(iconOnly), tb.itemSizeHints(hiddenText)
+	if short.Width != hidden.Width || short.Height != hidden.Height {
+		t.Fatalf("hidden label consumes space: icon-only %+v, hidden-text %+v", short, hidden)
+	}
+	hiddenText.SetTextVisible(true)
+	visible := tb.itemSizeHints(hiddenText)
+	if visible.Width <= hidden.Width {
+		t.Fatal("making the label visible did not change the width")
+	}
+	hints := tb.SizeHints()
+	tb.SetSize(hints.Width, hints.Height)
+	tb.Layout()
+	if len(tb.OverflowItems()) != 0 {
+		t.Fatal("the size advertised by SizeHints overflows")
+	}
+	last := tb.Items()[1]
+	if got := last.X() + last.Width() + Theme().ButtonMargin.R; math.Abs(got-hints.Width) > 1e-9 {
+		t.Fatalf("layout width %g differs from hints %g", got, hints.Width)
+	}
+}
+
+func TestToolBarSizeHintsContainTallTextAndMixedItems(t *testing.T) {
+	old := Theme().Font
+	Theme().Font = paint.NewFont(old.Family(), 30, false, false)
+	t.Cleanup(func() { Theme().Font = old })
+	tb := NewToolBar()
+	tb.AddAction("Design mode", nil, func() {})
+	both := tb.AddAction("Preview", LoadIcon("preview"), func() {})
+	both.SetTextVisible(true)
+	tb.AddSeparator()
+	tb.AddAction("", LoadIcon("document-save"), func() {})
+	hints := tb.SizeHints()
+	tb.SetSize(hints.Width, hints.Height)
+	tb.Layout()
+	if len(tb.OverflowItems()) != 0 {
+		t.Fatal("mixed-content preferred width overflows")
+	}
+	if hints.Height < Theme().Font.FontExtents().Height+Theme().ButtonMargin.T+Theme().ButtonMargin.B {
+		t.Fatalf("font height was omitted from toolbar hints: %+v", hints)
+	}
+	for _, item := range tb.Items() {
+		if item.Y() < 0 || item.Y()+item.Height() > hints.Height+1e-9 {
+			t.Fatalf("item %T covers the neighboring dock: bounds %v, bar height %g", item, item.Bounds1(), hints.Height)
+		}
+	}
+}
+
+func TestToolBarConstrainedHeightNeverEscapesTheBar(t *testing.T) {
+	tb := NewToolBar()
+	tb.AddAction("Design", nil, func() {})
+	tb.AddSeparator()
+	tb.AddWidget(NewEdit())
+	for _, height := range []float64{0, 1, 4, 9, 22} {
+		tb.SetSize(1000, height)
+		tb.Layout()
+		for _, item := range tb.Items() {
+			if item.Y() < 0 || item.Height() < 0 || item.Y()+item.Height() > height+1e-9 {
+				t.Fatalf("%T overflows height %g: %v", item, height, item.Bounds1())
+			}
+		}
+	}
+}
+
+func TestToolBarChevronFitsAnExtremelyNarrowBar(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	for _, size := range [][2]float64{{0, 0}, {1, 1}, {3, 2}, {10, 6}, {20, 12}} {
+		tb.SetSize(size[0], size[1])
+		tb.Layout()
+		b := tb.overflowButton()
+		if b.X() < 0 || b.Y() < 0 || b.Width() < 0 || b.Height() < 0 || b.X()+b.Width() > size[0] || b.Y()+b.Height() > size[1] {
+			t.Fatalf("chevron escapes %v toolbar: %v", size, b.Bounds1())
+		}
+		if GetToolTip(b) != "更多工具" {
+			t.Fatal("chevron has no readable Chinese tooltip")
+		}
+	}
+}
+
+func TestToolBarVerticalSwitchRestoresHorizontalOverflow(t *testing.T) {
+	tb, _ := newLabelToolBar()
+	tb.SetSize(120, 32)
+	tb.Layout()
+	if len(tb.OverflowItems()) == 0 {
+		t.Fatal("fixture never overflowed horizontally")
+	}
+	tb.SetOrientation(1)
+	hints := tb.SizeHints()
+	tb.SetSize(hints.Width, hints.Height)
+	tb.Layout()
+	if len(tb.OverflowItems()) != 0 || toolBarChevronShowing(tb) {
+		t.Fatal("horizontal overflow state survived the orientation change")
+	}
+	for _, item := range tb.Items() {
+		if !item.IsVisible() || item.X() < 0 || item.X()+item.Width() > hints.Width || item.Y()+item.Height() > hints.Height {
+			t.Fatalf("vertical item remains hidden or exceeds hints: %v", item.Bounds1())
+		}
+	}
+	last := tb.Items()[len(tb.Items())-1]
+	if got := last.Y() + last.Height() + Theme().ButtonMargin.B; math.Abs(got-hints.Height) > 1e-9 {
+		t.Fatalf("vertical layout %g differs from hints %g", got, hints.Height)
+	}
+}
+
+func TestToolBarOverflowKeepsNameStateAndLateDisableGuard(t *testing.T) {
+	tb := NewToolBar()
+	fired := 0
+	source := tb.AddAction("", LoadIcon("document-save"), func() { fired++ })
+	SetToolTip(source, "保存设计 (⌘S)")
+	source.Action().SetChecked(true)
+	tb.SetSize(20, 32)
+	tb.Layout()
+	var shown *Menu
+	old := showToolBarPopup
+	showToolBarPopup = func(m *Menu, _, _ float64) {
+		m.setVisible(true)
+		shown = m
+	}
+	t.Cleanup(func() { showToolBarPopup = old })
+	tb.showOverflow()
+	entry := shown.Items()[0].(*Button)
+	if entry.Text() != GetToolTip(source) || !entry.IsChecked() || !entry.IsEnabled() {
+		t.Fatal("overflow lost icon-only action's name or state")
+	}
+	source.Action().SetChecked(false)
+	source.Action().SetEnabled(false)
+	if entry.IsChecked() || entry.IsEnabled() {
+		t.Fatal("open menu kept stale original action state")
+	}
+	// The proxy must preserve both action- and original widget-level
+	// availability even for an already queued menu activation.
+	entry.Action().Trigger(entry)
+	if fired != 0 {
+		t.Fatal("stale overflow activation triggered a disabled action")
+	}
+	source.Action().SetEnabled(true)
+	source.SetEnabled(false)
+	entry.Action().Trigger(entry)
+	if fired != 0 || entry.IsEnabled() {
+		t.Fatal("overflow ignored the button-level disabled state")
+	}
+	source.SetEnabled(true)
+	entry.OnKeyDown(KeyEnter, false)
+	if fired != 1 || source.Text() != "" {
+		t.Fatal("overflow trigger did not reach the original action exactly once, or rewrote its text")
+	}
+}
+
+func TestToolBarNormalizesInvalidSizingOptions(t *testing.T) {
+	tb := NewToolBar()
+	tb.SetIconSize(-20)
+	if tb.IconSize() != 1 {
+		t.Fatal("negative icon size was not clamped")
+	}
+	for _, spacing := range []float64{-5, math.NaN(), math.Inf(1)} {
+		tb.SetSpacing(spacing)
+		if tb.Spacing() != 0 {
+			t.Fatalf("invalid spacing %g was accepted", spacing)
 		}
 	}
 }

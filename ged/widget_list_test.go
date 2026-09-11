@@ -1,6 +1,8 @@
 package ged
 
 import (
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"testing"
 )
 
@@ -31,6 +33,43 @@ func TestWidgetListSCADACategory(t *testing.T) {
 	for _, w := range want {
 		if !member[w] {
 			t.Errorf("widget %q not mapped to category %q", w, catName)
+		}
+	}
+}
+
+// Observe the real paint path, not just a detached color helper.
+type widgetListBrushRecorder struct {
+	paint.Painter
+	brushes []paint.Color
+}
+
+func (r *widgetListBrushRecorder) SetBrush1(c paint.Color) {
+	r.brushes = append(r.brushes, c)
+	r.Painter.SetBrush1(c)
+}
+func TestWidgetListUsesWorkbenchTheme(t *testing.T) {
+	previous := gui.CurrentThemeMode()
+	defer gui.SetThemeMode(previous)
+	for _, mode := range []gui.ThemeMode{gui.ThemeLight, gui.ThemeDark} {
+		gui.SetThemeMode(mode)
+		w := NewWidgetList()
+		w.SetBounds(0, 0, 220, 140)
+		w.SetActiveIndex(1)
+		pix := paint.NewPixmap(220, 140)
+		r := &widgetListBrushRecorder{Painter: pix.NewPainter()}
+		w.Draw(r)
+		theme := gui.Theme()
+		for _, want := range []paint.Color{theme.ViewBGColor, theme.FormLightColor, theme.TextColor, theme.MenuActiveBGColor, theme.MenuActiveTextColor} {
+			found := false
+			for _, got := range r.brushes {
+				if got == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("mode %v: palette did not use theme color %v", mode, want)
+			}
 		}
 	}
 }

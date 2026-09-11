@@ -47,6 +47,7 @@ func (this *PrjView) PrjModel() *PrjModel {
 func (this *PrjView) onContextMenu(x, y float64) {
 	xg, yg := this.MapToGlobal(x, y)
 	menu := gui.NewPopupMenu()
+	menu.SetParent(this)
 	menu.AddActionButton(this.actNewProject)
 	menu.ShowAsPopup(xg, yg, true)
 }

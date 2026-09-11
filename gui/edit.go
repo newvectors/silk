@@ -521,6 +521,10 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 	if !this.IsEnabled() {
 		return
 	}
+	// macOS uses Command for field editing, while Control remains accepted
+	// for existing hosts and other platforms. Do not treat Super as Control
+	// on Windows/Linux, or alter word-navigation/deletion modifier semantics.
+	action := IsKeyDown(KeyCtrl) || isActionModifier()
 	switch key {
 	case KeyBackSpace:
 		if this.readonly {
@@ -552,18 +556,18 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 		this.DeleteSelection()
 		this.emitEdited()
 	case 'C':
-		if IsKeyDown(KeyCtrl) {
+		if action {
 			this.Copy()
 		}
 	case 'V':
 		if this.readonly {
 			return
 		}
-		if IsKeyDown(KeyCtrl) {
+		if action {
 			this.paste()
 		}
 	case 'X':
-		if IsKeyDown(KeyCtrl) {
+		if action {
 			if this.readonly {
 				this.Copy()
 			} else {
@@ -571,7 +575,7 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 			}
 		}
 	case 'A':
-		if IsKeyDown(KeyCtrl) {
+		if action {
 			this.SelectAll()
 		}
 	case KeyLeft:

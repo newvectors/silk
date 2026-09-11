@@ -132,47 +132,9 @@ func LayoutPopup1(popup IWidget, xref, yref float64) {
 }
 
 func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, overlap float64) {
-	x0, y0 := xref, yref
-	x1, y1 := x0+wref, y0+href
-	if vertical {
-		y0 += overlap
-		y1 -= overlap
-	} else {
-		x0 += overlap
-		x1 -= overlap
-	}
-
-	dx0, dy0, dw, dh := DesktopArea()
-	dx1, dy1 := dx0+dw, dy0+dh
-
+	area := popupWorkAreaAt(xref, yref)
 	pw, ph := popup.Size()
-
-	var x, y float64
-	if vertical {
-		if y1+ph > dy1-32 {
-			x, y = x0, y0-ph
-		} else {
-			x, y = x0, y1
-		}
-	} else {
-		if x1+pw > dx1-32 {
-			x, y = x0-pw, y0
-		} else {
-			x, y = x1, y0
-		}
-	}
-	if x+pw > dx1 {
-		x = dx1 - pw
-	}
-	if x < dx0 {
-		x = dx0
-	}
-	if y+ph > dy1 {
-		y = dy1 - ph
-	}
-	if y < dy0 {
-		y = dy0
-	}
+	x, y := popupPositionInWorkArea(area, xref, yref, wref, href, pw, ph, vertical, overlap)
 	// Set popup position directly using global screen coordinates.
 	// Previously this did MapFromGlobal + SetPos which triggered
 	// Window.SetPos doing MapToGlobal again - the double conversion

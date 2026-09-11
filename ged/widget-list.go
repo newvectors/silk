@@ -242,8 +242,9 @@ func (this *WidgetList) Draw(g paint.Painter) {
 		g.Restore()
 	}()
 
-	// Background
-	g.SetBrush1(paint.Color{R: 245, G: 246, B: 248, A: 255})
+	// Follow the workbench theme instead of drawing a light-only palette.
+	theme := gui.Theme()
+	g.SetBrush1(theme.ViewBGColor)
 	g.Rectangle(0, 0, this.Width(), this.Height())
 	g.Fill()
 
@@ -264,9 +265,9 @@ func (this *WidgetList) Draw(g paint.Painter) {
 		firstRow = 0
 	}
 
-	font := gui.Theme().Font
+	font := theme.Font
 	boldFont := paint.NewFont(font.Family(), 12, true, false)
-	normalFont := paint.NewFont(font.Family(), 12, false, false)
+	normalFont := font
 
 	for i := firstRow; i < lastRow; i++ {
 		y := float64(i)*rh - sy*rh
@@ -275,13 +276,13 @@ func (this *WidgetList) Draw(g paint.Painter) {
 		isHeader, _ := this.isCategoryHeader(i)
 
 		if isHeader {
-			// --- Category header: dark blue-gray background ---
-			g.SetBrush1(paint.Color{R: 60, G: 75, B: 95, A: 255})
+			// Category header uses the raised theme surface.
+			g.SetBrush1(theme.FormLightColor)
 			g.Rectangle(0, y, vw, rh)
 			g.Fill()
 
 			// Subtle bottom highlight line
-			g.SetPen1(paint.Color{R: 75, G: 92, B: 115, A: 255}, 0)
+			g.SetPen1(theme.BorderColor, 0)
 			g.MoveTo(0, y+rh-1)
 			g.LineTo(vw, y+rh-1)
 			g.Stroke()
@@ -289,7 +290,7 @@ func (this *WidgetList) Draw(g paint.Painter) {
 			// Triangle indicator
 			hd, _ := item.Data.(catHeaderData)
 			cat := &this.categories[hd.index]
-			g.SetBrush1(paint.Color{R: 200, G: 210, B: 225, A: 255})
+			g.SetBrush1(theme.TextColor)
 			if cat.collapsed {
 				drawTriangleRight(g, 8, y+9, 10)
 			} else {
@@ -298,7 +299,7 @@ func (this *WidgetList) Draw(g paint.Painter) {
 
 			// Category name text
 			g.SetFont(boldFont)
-			g.SetBrush1(paint.Color{R: 230, G: 235, B: 245, A: 255})
+			g.SetBrush1(theme.TextColor)
 			fe := boldFont.FontExtents()
 			textY := y + fe.Ascent + (rh-fe.Height)*0.5
 			g.DrawText1(22, textY, cat.name)
@@ -309,16 +310,16 @@ func (this *WidgetList) Draw(g paint.Painter) {
 
 		// Alternating row background
 		if i%2 == 0 {
-			g.SetBrush1(paint.Color{R: 250, G: 251, B: 253, A: 255})
+			g.SetBrush1(theme.ViewBGColor)
 		} else {
-			g.SetBrush1(paint.Color{R: 243, G: 244, B: 247, A: 255})
+			g.SetBrush1(theme.FormColor)
 		}
 		g.Rectangle(0, y, vw, rh)
 		g.Fill()
 
 		// Selection highlight
 		if this.ActiveIndex() == i {
-			g.SetBrush1(paint.Color{R: 200, G: 220, B: 245, A: 200})
+			g.SetBrush1(theme.MenuActiveBGColor)
 			g.Rectangle(0, y, vw, rh)
 			g.Fill()
 		}
@@ -331,13 +332,17 @@ func (this *WidgetList) Draw(g paint.Painter) {
 
 		// Widget name
 		g.SetFont(normalFont)
-		g.SetBrush1(paint.Color{R: 50, G: 55, B: 65, A: 255})
+		if this.ActiveIndex() == i {
+			g.SetBrush1(theme.MenuActiveTextColor)
+		} else {
+			g.SetBrush1(theme.TextColor)
+		}
 		fe := normalFont.FontExtents()
 		textY := y + fe.Ascent + (rh-fe.Height)*0.5
 		g.DrawText1(46, textY, item.Text)
 
 		// Subtle bottom separator
-		g.SetPen1(paint.Color{R: 230, G: 232, B: 236, A: 255}, 0)
+		g.SetPen1(theme.BorderColor, 0)
 		g.MoveTo(20, y+rh)
 		g.LineTo(vw, y+rh)
 		g.Stroke()

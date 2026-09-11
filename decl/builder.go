@@ -131,7 +131,7 @@ func ComboBox(attrs ...Attr) *Node { return New("gui.ComboBox", attrs...) }
 // Slider is a continuous-value slider. Common props: value, min, max.
 func Slider(attrs ...Attr) *Node { return New("gui.Slider", attrs...) }
 
-// ProgressBar is a determinate progress indicator. Common props: value, min, max.
+// ProgressBar is a determinate progress indicator. Its value range is fixed at 0..1.
 func ProgressBar(attrs ...Attr) *Node { return New("gui.ProgressBar", attrs...) }
 
 // GroupBox is a labelled rectangular grouping container.

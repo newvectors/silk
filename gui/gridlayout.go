@@ -19,6 +19,7 @@ type GridCell struct {
 
 // GridLayout is a layout container that arranges children in a grid (similar to QGridLayout).
 type GridLayout struct {
+	layoutDisabled bool
 	Widget
 	cells      []GridCell
 	colWidths  []float64 // fixed column widths (0 = flexible)
@@ -38,15 +39,20 @@ func (this *GridLayout) Spacing() float64 {
 }
 
 func (this *GridLayout) SetSpacing(s float64) {
-	this.spacing = s
+	this.spacing = layoutDimension(s)
+	this.InvalidateLayout()
 }
 
 func (this *GridLayout) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("间距", this.Spacing, this.SetSpacing)
+	enumLayoutPadding(list, this.Padding, this.SetPadding)
 }
+
+func (this *GridLayout) Padding() Padding { return this.padding }
 
 func (this *GridLayout) SetPadding(p Padding) {
 	this.padding = p
+	this.InvalidateLayout()
 }
 
 // AddWidget places a widget at the given row and column with span of 1x1.
@@ -70,6 +76,20 @@ func (this *GridLayout) AddWidgetSpan(w IWidget, row, col, rowSpan, colSpan int)
 		colSpan: colSpan,
 	})
 	w.SetParent(this.Self())
+}
+
+// AddLayoutWidget is the designer/runtime bridge preserving row and spans.
+func (this *GridLayout) AddLayoutWidget(w IWidget, row, col, rowSpan, colSpan int) {
+	if w == nil || row < 0 || col < 0 || row > 4095 || col > 4095 {
+		return
+	}
+	if rowSpan > 4096-row {
+		rowSpan = 4096 - row
+	}
+	if colSpan > 4096-col {
+		colSpan = 4096 - col
+	}
+	this.AddWidgetSpan(w, row, col, rowSpan, colSpan)
 }
 
 // SetColumnWidth sets a fixed width for a column. Pass 0 for flexible sizing.
@@ -104,12 +124,15 @@ func (this *GridLayout) gridDimensions() (maxRows, maxCols int) {
 }
 
 func (this *GridLayout) Layout() {
+	if this.layoutDisabled {
+		return
+	}
 	if len(this.cells) == 0 {
 		return
 	}
 
 	w, h := this.Self().Size()
-	x0, y0, w, h := this.padding.Apply(0, 0, w, h)
+	x0, y0, w, h := applyLayoutPadding(this.padding, w, h)
 
 	maxRows, maxCols := this.gridDimensions()
 	if maxRows == 0 || maxCols == 0 {
@@ -234,6 +257,9 @@ func (this *GridLayout) Draw(g paint.Painter) {
 }
 
 func (this *GridLayout) SizeHints() SizeHints {
+	if this.layoutDisabled {
+		return SizeHints{Width: this.Width(), Height: this.Height()}
+	}
 	if len(this.cells) == 0 {
 		return SizeHints{}
 	}
@@ -284,4 +310,13 @@ func (this *GridLayout) SizeHints() SizeHints {
 
 	releaseGridScratch(scratch)
 	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+}
+
+// LayoutEnabled defaults to true for ordinary runtime widgets. Designer files
+// can explicitly preserve a legacy free-positioned container without having
+// a later resize silently rearrange its contents.
+func (this *GridLayout) LayoutEnabled() bool { return !this.layoutDisabled }
+func (this *GridLayout) SetLayoutEnabled(enabled bool) {
+	this.layoutDisabled = !enabled
+	this.InvalidateLayout()
 }

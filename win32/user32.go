@@ -7,13 +7,19 @@
 package win32
 
 import (
-	// #include <wtypes.h>
-	// #include <winable.h>
-	"C"
 	"fmt"
 	"syscall"
 	"unsafe"
 )
+
+// Win32 headers alias the Ptr APIs to their Long equivalents on 32-bit.
+// Calling the Long entry points on 64-bit truncates pointers and owner HWNDs.
+func windowLongPtrProcName(operation string) string {
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		return operation + "WindowLongPtrW"
+	}
+	return operation + "WindowLongW"
+}
 
 var (
 	moduser32 = syscall.NewLazyDLL("user32.dll")
@@ -45,9 +51,9 @@ var (
 	procScreenToClient                = moduser32.NewProc("ScreenToClient")
 	procCallWindowProc                = moduser32.NewProc("CallWindowProcW")
 	procSetWindowLong                 = moduser32.NewProc("SetWindowLongW")
-	procSetWindowLongPtr              = moduser32.NewProc("SetWindowLongW")
+	procSetWindowLongPtr              = moduser32.NewProc(windowLongPtrProcName("Set"))
 	procGetWindowLong                 = moduser32.NewProc("GetWindowLongW")
-	procGetWindowLongPtr              = moduser32.NewProc("GetWindowLongW")
+	procGetWindowLongPtr              = moduser32.NewProc(windowLongPtrProcName("Get"))
 	procEnableWindow                  = moduser32.NewProc("EnableWindow")
 	procIsWindowEnabled               = moduser32.NewProc("IsWindowEnabled")
 	procIsWindowVisible               = moduser32.NewProc("IsWindowVisible")
@@ -982,30 +988,46 @@ func ChangeDisplaySettingsEx(szDeviceName *uint16, devMode *DEVMODE, hwnd HWND, 
 	return int32(ret)
 }
 
-func SendInput(inputs []INPUT) uint32 {
-	var validInputs []C.INPUT
+// nativeInput uses the largest INPUT union member to preserve the Windows
+// ABI's alignment: 28 bytes/offset 4 on 32-bit, 40 bytes/offset 8 on 64-bit.
+// Keeping this syscall-only avoids excluding all User32 wrappers when cgo is
+// disabled (SendInput was the only reason this file imported C).
+type nativeInput struct {
+	Type uint32
+	Data MOUSEINPUT
+}
+
+func marshalInputs(inputs []INPUT) []nativeInput {
+	validInputs := make([]nativeInput, 0, len(inputs))
 
 	for _, oneInput := range inputs {
-		input := C.INPUT{_type: C.DWORD(oneInput.Type)}
+		input := nativeInput{Type: oneInput.Type}
 
 		switch oneInput.Type {
 		case INPUT_MOUSE:
-			(*MouseInput)(unsafe.Pointer(&input)).mi = oneInput.Mi
+			input.Data = oneInput.Mi
 		case INPUT_KEYBOARD:
-			(*KbdInput)(unsafe.Pointer(&input)).ki = oneInput.Ki
+			*(*KEYBDINPUT)(unsafe.Pointer(&input.Data)) = oneInput.Ki
 		case INPUT_HARDWARE:
-			(*HardwareInput)(unsafe.Pointer(&input)).hi = oneInput.Hi
+			*(*HARDWAREINPUT)(unsafe.Pointer(&input.Data)) = oneInput.Hi
 		default:
 			panic("unkown type")
 		}
 
 		validInputs = append(validInputs, input)
 	}
+	return validInputs
+}
 
+func SendInput(inputs []INPUT) uint32 {
+	if len(inputs) == 0 {
+		return 0
+	}
+	validInputs := marshalInputs(inputs)
 	ret, _, _ := procSendInput.Call(
 		uintptr(len(validInputs)),
 		uintptr(unsafe.Pointer(&validInputs[0])),
-		uintptr(unsafe.Sizeof(C.INPUT{})),
+		uintptr(unsafe.Sizeof(nativeInput{})),
 	)
 	return uint32(ret)
 }
@@ -1044,7 +1066,13 @@ func SystemParametersInfo(uiAction, uiParam uint32, pvParam uintptr, fWinIni uin
 }
 
 func WindowFromPoint(x, y int32) HWND {
-	// POINT拆为4字节一组, 即两个int32
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		// The x64 ABI passes this 8-byte structure by value in one register.
+		point := uint64(uint32(x)) | uint64(uint32(y))<<32
+		ret, _, _ := procWindowFromPoint.Call(uintptr(point))
+		return HWND(ret)
+	}
+	// On 32-bit stdcall POINT occupies two stack words.
 	ret, _, _ := procWindowFromPoint.Call(uintptr(x), uintptr(y))
 	return HWND(ret)
 }
@@ -1056,12 +1084,12 @@ func CreateIconIndirect(iconinfo *ICONINFO) HICON {
 }
 
 func GetParent(hWnd HWND) HWND {
-	// POINT拆为4字节一组, 即两个int32
-	ret, _, _ := procWindowFromPoint.Call(uintptr(hWnd))
+	ret, _, _ := procGetParent.Call(uintptr(hWnd))
 	return HWND(ret)
 }
 
 func GetWindowPlacement(hWnd HWND) (wp WINDOWPLACEMENT, ok bool) {
+	wp.Length = uint32(unsafe.Sizeof(wp))
 	ret, _, _ := procGetWindowPlacement.Call(uintptr(hWnd),
 		uintptr(unsafe.Pointer(&wp)))
 	return wp, ret != 0

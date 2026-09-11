@@ -47,15 +47,12 @@ jobs:
           cache: true
 
       # ─── Cairo install per-platform ───
-      - name: Install Cairo (Linux)
+      - name: Install Linux build and desktop dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config libcairo2-dev \
-            libx11-dev libxcursor-dev libxi-dev \
-            libxinerama-dev libxrandr-dev libxxf86vm-dev \
-            libgl1-mesa-dev
+          bash scripts/install-linux-deps.sh
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils
+          echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
 
       - name: Install Cairo (macOS)
         if: runner.os == 'macOS'
@@ -76,7 +73,7 @@ jobs:
           path-type: inherit
           install: |
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-cairo
 
       # Ask MSYS2 itself where it lives instead of hardcoding C:\msys64 —
@@ -92,10 +89,16 @@ jobs:
           echo "CGO_CFLAGS=-I$ROOT/include" >> $GITHUB_ENV
           echo "CGO_LDFLAGS=-L$ROOT/lib -lcairo" >> $GITHUB_ENV
           echo "CGO_ENABLED=1" >> $GITHUB_ENV
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
 
       # ─── Test ───
       - name: Run tests
-        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/
+
+      - name: Test platform packaging scripts
+        shell: bash
+        run: bash scripts/test-platform-scripts.sh
 
       # ─── Build artifacts ───
       - name: Build designer
@@ -114,6 +117,19 @@ jobs:
         run: |
           go build -v -ldflags="-s -w" -o silk-demo-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} demo.go
 
+      - name: Build IDE and generator
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -v -ldflags="-s -w" -o silkide-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkide/
+          go build -v -ldflags="-s -w" -o silkgen-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkgen/
+
+      - name: Smoke IDE (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: bash scripts/linux-run-smoke.sh ./silkide-${{ matrix.label }}
+
       # ─── Package ───
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -121,8 +137,22 @@ jobs:
           mkdir -p dist/silk-${{ matrix.label }}
           cp silk-designer-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-designer
           cp silk-demo-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-demo
+          cp silkide-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkide
+          cp silkgen-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkgen
           cp -r icon dist/silk-${{ matrix.label }}/
           cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
+          cat > dist/silk-${{ matrix.label }}/RUNTIME-DEPENDENCIES.txt <<'EOF'
+          This archive is not a standalone portable app bundle.
+          macOS: install Cairo with Homebrew (brew install cairo); Homebrew dylibs
+          are external dependencies and are not bundled or relocated here.
+          These binaries target their CI runner's runtime; compatibility with
+          older macOS versions or older Linux glibc is not implied.
+          Linux: requires Cairo, X11/OpenGL runtime libraries and an X11/XWayland
+          desktop session. File dialogs use zenity; external links use xdg-open.
+          Building generated Go applications also requires Go and the platform
+          development libraries documented in README.md. gopls/dlv are optional
+          separately installed IDE tools, not included in this archive.
+          EOF
           cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
 
       # Runs in the MSYS2 shell so /ucrt64 resolves wherever setup-msys2 put it,
@@ -140,23 +170,12 @@ jobs:
           mkdir -p "$OUT"
           cp silk-designer-${{ matrix.label }}.exe "$OUT/silk-designer.exe"
           cp silk-demo-${{ matrix.label }}.exe "$OUT/silk-demo.exe"
+          cp silkide-${{ matrix.label }}.exe "$OUT/silkide.exe"
+          cp silkgen-${{ matrix.label }}.exe "$OUT/silkgen.exe"
           cp -r icon "$OUT/"
           cp README.md LICENSE CHANGELOG.md "$OUT/"
 
-          # Copy every MSYS2-provided DLL the binaries actually link against.
-          for exe in "$OUT"/*.exe; do
-            ldd "$exe" | awk '{print $3}' | grep -iE '^/(ucrt64|mingw64)/' | sort -u | while read -r dll; do
-              [ -f "$dll" ] && cp -n "$dll" "$OUT/" || true
-            done
-          done
-
-          # A package without cairo is dead on arrival; do not publish one.
-          if [ ! -f "$OUT/libcairo-2.dll" ]; then
-            echo "::error::libcairo-2.dll was not bundled - the release would not start"
-            ldd "$OUT/silk-designer.exe" || true
-            exit 1
-          fi
-          echo "bundled DLLs:"; ls -1 "$OUT"/*.dll
+          bash scripts/bundle-windows-dlls.sh "$OUT"
 
           cd dist && 7z a silk-${{ matrix.label }}.zip silk-${{ matrix.label }}
 

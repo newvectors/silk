@@ -1,6 +1,9 @@
 package decl
 
-import "reflect"
+import (
+	"math"
+	"reflect"
+)
 
 // attachChild wires child as a child of parent at runtime, by calling
 // any SetParent-shaped method the child exposes. We use reflection here
@@ -51,4 +54,57 @@ func attachChild(parent, child interface{}) {
 		return
 	}
 	method.Call([]reflect.Value{pv})
+}
+
+// attachLayoutChild registers actual Grid/Form cells and invokes simple layout
+// adders. Merely SetParent-ing a Grid child leaves its private cell list empty.
+func attachLayoutChild(parent, child interface{}, parentType string, node *Node, index int) bool {
+	if manager, ok := parent.(interface{ LayoutEnabled() bool }); ok && !manager.LayoutEnabled() {
+		return false
+	}
+	var method string
+	var args []reflect.Value
+	switch parentType {
+	case "gui.GridLayout", "gui.FormLayout":
+		method = "AddLayoutWidget"
+		values := []int{index / 2, index % 2, 1, 1}
+		for i, key := range []string{"layout_row", "layout_column", "layout_row_span", "layout_column_span"} {
+			if val, ok := node.PropValue(key); ok {
+				if lit, ok := val.(Lit); ok {
+					if number, ok := asFloat(lit.V); ok && !math.IsNaN(number) && !math.IsInf(number, 0) && number >= 0 && number <= 4095 {
+						values[i] = int(number)
+					}
+				}
+			}
+		}
+		if values[2] < 1 {
+			values[2] = 1
+		}
+		if values[3] < 1 {
+			values[3] = 1
+		}
+		if parentType == "gui.FormLayout" {
+			values[1] %= 2
+		}
+		args = []reflect.Value{reflect.ValueOf(child)}
+		for _, n := range values {
+			args = append(args, reflect.ValueOf(n))
+		}
+	case "gui.HBox", "gui.VBox":
+		method = "AddWidget"
+		args = []reflect.Value{reflect.ValueOf(child)}
+	default:
+		return false
+	}
+	m := reflect.ValueOf(parent).MethodByName(method)
+	if !m.IsValid() || m.Type().NumIn() != len(args) {
+		return false
+	}
+	for i, a := range args {
+		if !a.IsValid() || !a.Type().AssignableTo(m.Type().In(i)) {
+			return false
+		}
+	}
+	m.Call(args)
+	return true
 }

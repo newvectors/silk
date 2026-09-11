@@ -34,8 +34,10 @@ type subIcon struct {
 }
 
 type icon struct {
-	name string
-	subs []*subIcon
+	name     string
+	subs     []*subIcon
+	draw     proceduralIconDrawer
+	resource bool
 }
 
 type cachedIcon struct {
@@ -126,6 +128,10 @@ func LoadIcon(name string) Icon {
 			ico.subs = append(ico.subs, &subIcon{ss.size, ss.path, nil, nil})
 		}
 		ico.name = name
+		ico.resource = true
+		if preferVectorIcons {
+			ico.draw = proceduralFallbacks[name]
+		}
 	} else if name == "image-missing" {
 		ico = genMissingIcon()
 	} else if drawer, ok := proceduralFallbacks[name]; ok {
@@ -269,7 +275,17 @@ func (this *icon) String() string {
 }
 
 func (this *icon) Pixmap(size int) Pixmap {
-
+	if size <= 0 {
+		return nil
+	}
+	if this.draw != nil {
+		pixmap := NewPixmap(size, size)
+		cc := pixmap.NewContext()
+		drawProceduralIcon(cc, this.draw, float64(size), false)
+		cc.Destroy()
+		pixmap.Flush()
+		return pixmap
+	}
 	sub := this.getNearest(size)
 	if sub == nil {
 		return nil

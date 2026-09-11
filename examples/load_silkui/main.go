@@ -6,7 +6,7 @@
 //
 // Build:
 //
-//	CGO_CFLAGS="$(pkg-config --cflags cairo)" go run ./examples/load_silkui/ path/to/design.silkui
+//	CGO_CFLAGS="$(pkg-config --cflags cairo)" go run ./examples/load_silkui/main.go path/to/design.silkui
 package main
 
 import (

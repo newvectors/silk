@@ -97,6 +97,8 @@ func (pc *previewController) preview(scene *ged.GedScene) {
 // the backend wiring in preview so that lifecycle logic stays free of window
 // handling. Must run on the UI thread.
 func (pc *previewController) showForm(title string, form *gui.Form) {
+	// Dock.AddView immediately resizes its view. Capture the designed size first.
+	designW, designH := form.Size()
 	frame := gui.NewFrameWindow()
 	frame.SetTitle("Preview — " + title)
 	frame.SetClosedCallback(func(*gui.Frame) {
@@ -111,20 +113,23 @@ func (pc *previewController) showForm(title string, form *gui.Form) {
 	}
 	pc.frame = frame
 
-	// Match the standalone designer's preview: give the window a sensible floor
-	// so a tiny form still opens with a usable title bar and borders.
-	w, h := form.Size()
-	if w < 320 {
-		w = 320
-	}
-	if h < 240 {
-		h = 240
-	}
+	// Account for dock/menu chrome as well as the form itself. Otherwise
+	// controls near the form's right/bottom edge are silently clipped.
+	sizePreviewFrame(frame, form, designW, designH)
 	if win := frame.Window(); win != nil {
-		win.SetSize(w, h)
+		win.SetSize(frame.Size())
 		win.MoveToCenter()
 	}
 	frame.Show()
+}
+
+// sizePreviewFrame is also exercised with an unattached native-free frame.
+func sizePreviewFrame(frame *gui.Frame, form *gui.Form, width, height float64) {
+	frame.SetSize(max(320, width), max(240, height))
+	frame.Layout()
+	viewW, viewH := form.Size()
+	frame.SetSize(frame.Width()+max(0, width-viewW), frame.Height()+max(0, height-viewH))
+	frame.Layout()
 }
 
 // stopPreview tears the current preview down: it unwires the live screen, stops

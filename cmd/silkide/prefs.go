@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/uk0/silk/ged"
@@ -160,7 +161,7 @@ func (p *preferences) RecentFiles() []string {
 		if path == "" {
 			continue
 		}
-		if _, err := os.Stat(path); err != nil {
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
 			continue
 		}
 		out = append(out, path)
@@ -232,7 +233,7 @@ func existingPaths(paths []string) []string {
 		if path == "" || seen[path] {
 			continue
 		}
-		if _, err := os.Stat(path); err != nil {
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
 			continue
 		}
 		seen[path] = true
@@ -254,6 +255,10 @@ func existingPaths(paths []string) []string {
 // init().
 func installLocale() {
 	if v := os.Getenv("SILKIDE_LOCALE"); v != "" {
+		switch strings.ToLower(strings.ReplaceAll(v, "_", "-")) {
+		case "zh", "zh-cn", "zh-hans", "zh-sg":
+			v = "zh-CN"
+		}
 		i18n.SetLocale(v)
 	}
 	registerSilkideTranslations()
@@ -267,6 +272,11 @@ func registerSilkideTranslations() {
 		"Debug":           "调试",
 		"Run":             "运行",
 		"Build":           "构建",
+		"Welcome":         "欢迎",
+		"Edit":            "编辑",
+		"Design":          "设计",
+		"Save All":        "全部保存",
+		"Preview":         "预览",
 		"Save":            "保存",
 		"Open":            "打开",
 		"Undo":            "撤销",
@@ -276,7 +286,7 @@ func registerSilkideTranslations() {
 		"Settings":        "设置",
 		"Menu":            "菜单",
 		"New":             "新建",
-		"Dump A11y Tree":  "导出无障碍树",
+		"Dump A11y Tree":  "显示无障碍树",
 		"Unsaved changes": "有未保存的修改",
 		"The current design has unsaved changes. Save before continuing?": "当前设计有未保存的修改。在继续前保存吗？",
 		"Discard":          "丢弃",
@@ -285,33 +295,53 @@ func registerSilkideTranslations() {
 		"Close":            "关闭",
 		"Recover Autosave": "从自动保存恢复",
 		"A more recent autosave was found for %s. Recover from it?": "检测到 %s 有更新的自动保存。是否恢复？",
-		"About":                            "关于",
-		"build ok":                         "构建成功",
-		"build: error":                     "构建失败",
-		"build: %d errors":                 "构建错误: %d",
-		"Command Palette":                  "命令面板",
-		"Open Recent":                      "打开最近",
-		"Open Recent...":                   "打开最近...",
-		"(empty)":                          "(空)",
-		"Fit to View":                      "适应视口",
-		"Find in Files":                    "在文件中查找",
-		"Show Outline":                     "显示大纲",
-		"Show Problems":                    "显示问题",
-		"Show Bookmarks":                   "显示书签",
-		"Show Packages":                    "显示包列表",
-		"Refresh Packages":                 "刷新包列表",
-		"Add Bookmark":                     "添加书签",
-		"Rename Symbol":                    "重命名符号",
-		"New name:":                        "新名称：",
-		"Renamed %s → %s (%d occurrences)": "已重命名 %s → %s (%d 处)",
-		"Rename failed: %v":                "重命名失败: %v",
-		"Rename Symbol not available":      "暂不支持重命名符号",
-		"Configure Run...":                 "配置运行参数...",
-		"Run Configuration":                "运行配置",
-		"OK":                               "确定",
-		"Run arguments:":                   "运行参数:",
-		"Run args saved":                   "运行参数已保存",
-		"Run config saved":                 "运行配置已保存",
+		"About":                                "关于",
+		"A visual designer for Go interfaces.": "面向 Go 界面的可视化设计器。",
+		"Drag, arrange and generate Go.":       "拖拽控件、编排布局、生成 Go 代码。",
+		"SDK version":                          "SDK 版本",
+		"App version":                          "应用版本",
+		"Development build":                    "开发构建",
+		"Build information unavailable":        "构建信息不可用",
+		"Working tree modified":                "工作区含未提交修改",
+		"Runtime":                              "运行时",
+		"Platform":                             "平台",
+		"Rendering":                            "渲染后端",
+		"Project settings could not be saved":  "项目设置保存失败",
+		"Project settings saved":               "项目设置已保存",
+		"No design to export":                  "没有可导出的设计文档",
+		"Accessibility tree unavailable":       "无障碍树暂不可用",
+		"Accessibility tree shown in Output":   "无障碍树已显示在输出面板",
+		"Open an editor document first":        "请先切换到已打开的代码文档",
+		"Run stopped":                          "运行已停止",
+		"All documents are saved":              "所有文档均已保存",
+		"Save All did not complete":            "全部保存未完成",
+		"No running process":                   "当前没有运行中的任务",
+		"build ok":                             "构建成功",
+		"build: error":                         "构建失败",
+		"build: %d errors":                     "构建错误: %d",
+		"Command Palette":                      "命令面板",
+		"Open Recent":                          "打开最近",
+		"Open Recent...":                       "打开最近...",
+		"(empty)":                              "(空)",
+		"Fit to View":                          "适应视口",
+		"Find in Files":                        "在文件中查找",
+		"Show Outline":                         "显示大纲",
+		"Show Problems":                        "显示问题",
+		"Show Bookmarks":                       "显示书签",
+		"Show Packages":                        "显示包列表",
+		"Refresh Packages":                     "刷新包列表",
+		"Add Bookmark":                         "添加书签",
+		"Rename Symbol":                        "重命名符号",
+		"New name:":                            "新名称：",
+		"Renamed %s → %s (%d occurrences)":     "已重命名 %s → %s (%d 处)",
+		"Rename failed: %v":                    "重命名失败: %v",
+		"Rename Symbol not available":          "暂不支持重命名符号",
+		"Configure Run...":                     "配置运行参数...",
+		"Run Configuration":                    "运行配置",
+		"OK":                                   "确定",
+		"Run arguments:":                       "运行参数:",
+		"Run args saved":                       "运行参数已保存",
+		"Run config saved":                     "运行配置已保存",
 		"silkide: %d env entries configured (not yet forwarded to go run)": "silkide: 已配置 %d 项环境变量（暂未转发给 go run）",
 		"Open File":                       "打开文件",
 		"Quick Open File":                 "快速打开文件",
@@ -444,8 +474,8 @@ func localeIsChinese() bool {
 // Mapping (Cmd on macOS, Ctrl elsewhere via gui.ModAction):
 //
 //	Cmd+O    → OpenFileDialog → openFromTree
-//	Cmd+S    → save active design canvas
-//	Cmd+Z    → undo on the design canvas's UndoStack
+//	Cmd+S    → save the visible code/design document
+//	Cmd+Z    → undo in the visible code/design document
 //	Cmd+Shift+Z / Cmd+Y → redo
 //	Cmd+R    → refresh the design canvas
 func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
@@ -459,44 +489,20 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
-	gui.RegisterShortcut(gui.ModAction, 'S', func() {
-		// Cmd+S routes to two save targets: the active code-editor tab
-		// (with gofmt-on-save for .go files) when one is focused, and
-		// the design canvas (.silkui + .silk.go regen) otherwise.
-		// saveActiveEditorToDisk is a no-op when no editor tab has a
-		// tracked path; falling through to performSave then covers the
-		// design-canvas case without us having to track "which dock
-		// tab is active" here.
-		if !saveActiveEditorToDisk(editorTabs) {
-			performSave(designCanvas)
-		}
-	})
-	gui.RegisterShortcut(gui.ModAction, 'Z', func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanUndo() {
-				stack.Undo()
-				designCanvas.Update()
-			}
-		}
-	})
-	// Redo: both Cmd+Shift+Z (Mac convention) and Cmd+Y (Windows /
-	// Linux convention) bind to the same handler.
-	redo := func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if stack := scene.UndoStack(); stack != nil && stack.CanRedo() {
-				stack.Redo()
-				designCanvas.Update()
-			}
-		}
-	}
+	gui.RegisterShortcut(gui.ModAction, 'S', func() { saveCurrentDocument(editorTabs, designCanvas) })
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'S', func() { performSaveAll(editorTabs, designCanvas) })
+	gui.RegisterShortcut(gui.ModAction, 'Z', func() { undoCurrentDocument(editorTabs, designCanvas, false) })
+	redo := func() { undoCurrentDocument(editorTabs, designCanvas, true) }
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'Z', redo)
 	gui.RegisterShortcut(gui.ModAction, 'Y', redo)
+	for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
+		gui.RegisterShortcut(gui.ModAction, '1'+i, func() {
+			if globalWorkbench != nil {
+				globalWorkbench.activate(mode)
+			}
+		})
+	}
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'R', func() { previewDesign(designCanvas) })
 	gui.RegisterShortcut(gui.ModAction, 'R', func() {
 		if designCanvas != nil {
 			designCanvas.Update()
@@ -504,7 +510,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	})
 	// Cmd+W: close active editor tab, Cmd+Q: quit. Standard mac UX.
 	gui.RegisterShortcut(gui.ModAction, 'W', func() {
-		if editorTabs == nil {
+		if editorTabs == nil || documentMode(editorTabs, designCanvas) != modeEdit {
 			return
 		}
 		if idx := editorTabs.CurrentIndex(); idx >= 0 {
@@ -553,11 +559,9 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction, 0xBD, func() { zoomCanvas(designCanvas, 1.0/1.25) })
 	gui.RegisterShortcut(gui.ModAction, '0', func() { zoomCanvasTo(designCanvas, 1.0) })
 
-	// F: fit the form to the viewport. JetBrains / Figma muscle memory
-	// — one keystroke says "show me everything at the largest zoom that
-	// still fits". Goes through SetPageLayout so a manual Cmd+= after
-	// also clicks back into PL_FREE_ZOOM cleanly.
-	gui.RegisterShortcut(0, 'F', func() { fitCanvasToView(designCanvas) })
+	// A plain F belongs to the editor. Fit to View uses a modified chord;
+	// subsequent manual zoom switches back to PL_FREE_ZOOM.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, '0', func() { fitCanvasToView(designCanvas) })
 
 	// F5 → Run, F6 → Build, F7 → Test. Visual Studio / JetBrains
 	// muscle memory. No modifier so they don't clash with Cmd+R
@@ -694,4 +698,11 @@ func zoomCanvasTo(canvas *ged.GedView, z float64) {
 	canvas.SetZoomFactor(z)
 	canvas.Update()
 	setZoomLabel(canvas.ZoomFactor())
+}
+
+func actionKeyHint() string {
+	if runtime.GOOS == "darwin" {
+		return "Cmd"
+	}
+	return "Ctrl"
 }

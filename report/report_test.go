@@ -2,13 +2,13 @@ package report
 
 import (
 	"bytes"
+	"database/sql"
 	"math"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/historian"
 )
 
@@ -53,34 +53,59 @@ func TestAggregateReducer(t *testing.T) {
 	}
 }
 
-// buildFixture records two tags, drives a few values through them (all inside
-// the first bucket), and returns the historian plus the [start,to) window.
+// buildFixture seeds fixed timestamps through SQLite, then exercises the real
+// historian query and report aggregation. Record itself is covered by historian
+// tests; report fixtures must not assume disk writes finish within 100ms.
 func buildFixture(t *testing.T) (h *historian.Historian, start, to time.Time, interval time.Duration) {
 	t.Helper()
-	h, err := historian.NewHistorian(filepath.Join(t.TempDir(), "hist.db"))
+	path := filepath.Join(t.TempDir(), "hist.db")
+	h, err := historian.NewHistorian(path)
 	if err != nil {
 		t.Fatalf("NewHistorian: %v", err)
 	}
 	t.Cleanup(func() { h.Close() })
 
-	tags := core.NewTagDB()
-	start = time.Now()
-	stop := h.Record(tags, []string{"temp", "flow"})
-	// Record primes each fresh tag with its current value (0). The SetValues run
-	// in a tight loop with no sleeps, so every sample lands within a few ms of
-	// start — comfortably inside bucket 0 = [start, start+100ms).
-	//   temp samples: [0, 10, 20, 30]
-	//   flow samples: [0, 6, 12]
-	for _, v := range []float64{10, 20, 30} {
-		tags.SetValue("temp", v)
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, v := range []float64{6, 12} {
-		tags.SetValue("flow", v)
+	defer db.Close()
+	start = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for _, tag := range []struct {
+		name   string
+		values []float64
+	}{
+		{"temp", []float64{0, 10, 20, 30}},
+		{"flow", []float64{0, 6, 12}},
+	} {
+		for i, value := range tag.values {
+			ts := start.Add(time.Duration(i) * time.Millisecond)
+			if _, err := db.Exec(`INSERT INTO samples (tag, ts, value) VALUES (?, ?, ?)`, tag.name, ts.UnixNano(), value); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	stop()
 
 	// 100ms interval over a 1s window -> 10 buckets; only bucket 0 holds samples.
 	return h, start, start.Add(time.Second), 100 * time.Millisecond
+}
+
+func TestBuildHalfOpenBucketBoundaries(t *testing.T) {
+	h, start, _, _ := buildFixture(t)
+	// Values lie exactly on 0/1/2/3ms boundaries. [1ms,3ms) must include
+	// 10 and 20 once each, excluding both the preceding 0 and final 30.
+	r, err := Build(h, []string{"temp"}, start.Add(time.Millisecond), start.Add(3*time.Millisecond), time.Millisecond, Sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Buckets) != 2 {
+		t.Fatalf("buckets = %d, want 2", len(r.Buckets))
+	}
+	for i, want := range []float64{10, 20} {
+		if got := r.Buckets[i].Values["temp"]; got != want {
+			t.Errorf("boundary bucket %d = %v, want %v", i, got, want)
+		}
+	}
 }
 
 // Build an Avg and a Max report and assert the first bucket's numbers, plus that

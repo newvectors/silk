@@ -93,12 +93,15 @@ type Window struct {
 	wt          WindowType
 	title       string
 	//	staticTitle  bool
-	autoCaptured bool
-	toCapture    bool
-	mouseEntered bool
-	alowDnd      bool
-	inModal      bool
-	closeOnHide  bool
+	autoCaptured           bool
+	toCapture              bool
+	mouseEntered           bool
+	alowDnd                bool
+	inModal                bool
+	closeOnHide            bool
+	popupOwner             *Window
+	popupRestoreFocus      IWidget
+	popupFocusCheckPending bool
 
 	// 临时存放模块窗口的返回值
 	modalRet interface{}
@@ -325,6 +328,9 @@ func updateCursor() {
 var uiThread win32.HANDLE
 
 func (this *Window) create(p *Window, wt WindowType) error {
+	if wt == WtPopup {
+		this.popupOwner, this.popupRestoreFocus = p, focusWidget
+	}
 	ht := win32.GetCurrentThread()
 	if uiThread == 0 {
 		uiThread = ht
@@ -414,6 +420,7 @@ func (this *Window) create(p *Window, wt WindowType) error {
 }
 
 func (this *Window) destroy() {
+	this.prepareWindowDestruction()
 	// Order matters. This used to clear the widget FIRST, but DestroyWindow
 	// dispatches WM_DESTROY synchronously and the queue can still hold input
 	// for this window, so every handler that starts with win.widget.Bounds()
@@ -423,10 +430,12 @@ func (this *Window) destroy() {
 	//	pointer dereference        (512 = WM_MOUSEMOVE)
 	//
 	// Destroy first (OnDestroy unregisters the window), then drop the widget.
-	forgetWidgetsOfWindow(this)
-	win32.DestroyWindow(this.hWnd)
+	if this.hWnd != 0 {
+		win32.DestroyWindow(this.hWnd)
+	}
 	this.hWnd = 0
 	this.widget = nil
+	this.backPainter, this.backBuffer = nil, nil
 }
 
 // forgetWidgetsOfWindow drops the package-level widget pointers that belong to
@@ -446,26 +455,33 @@ func forgetWidgetsOfWindow(win *Window) {
 		if iw == nil {
 			return false
 		}
-		// A widget already detached from any window reports nil; treat that as
-		// stale too, since it can no longer be mapped or hit-tested.
-		w := iw.Window()
-		return w == win || w == nil
+		// Ordinary child widgets have no Window of their own. Query the
+		// owning window, or closing one dialog clears every other form's input.
+		return iw.OwnerWindow() == win
 	}
 	if belongs(lastMouseWidget) {
 		lastMouseWidget = nil
 	}
 	if belongs(mouseHoverWidget) {
-		mouseHoverWidget = nil
+		setMouseHoverWidget(nil)
 	}
 	if belongs(focusWidget) {
 		focusWidget = nil
 	}
-	for i := 0; i < len(captureStack); {
-		if belongs(captureStack[i]) {
-			captureStack = append(captureStack[:i], captureStack[i+1:]...)
-			continue
+	kept := captureStack[:0]
+	for _, captured := range captureStack {
+		if !belongs(captured) {
+			kept = append(kept, captured)
 		}
-		i++
+	}
+	clear(captureStack[len(kept):])
+	captureStack = kept
+	if win.hWnd != 0 && win32.GetCapture() == win.hWnd {
+		win32.ReleaseCapture()
+	}
+	win.autoCaptured, win.toCapture, win.mouseEntered = false, false, false
+	if activeForm == win {
+		activeForm = nil
 	}
 }
 
@@ -512,7 +528,7 @@ func (this *Window) Close() {
 		iclose.Close()
 	}
 
-	win32.DestroyWindow(this.hWnd)
+	this.destroy()
 }
 
 func (this *Window) Save() bool {
@@ -539,15 +555,11 @@ func (this *Window) Native() WinId {
 }
 
 func (this *Window) OnDestroy() {
-	if this.hWnd == 0 {
-		core.Warn("window seams already destroyed.")
-		return
-	} else {
-		core.Debug(`window destroyed. title = "` + this.Title() +
-			`", widget = "` + core.ObjInfo(this.widget) + `"`)
-	}
+	this.prepareWindowDestruction()
 	delete(winMap, this.hWnd)
 	this.hWnd = 0
+	this.widget = nil
+	this.backPainter, this.backBuffer = nil, nil
 }
 
 func (this *Window) SetFrameBounds(x, y, w, h float64) {
@@ -610,6 +622,9 @@ func (this *Window) SetBounds(x, y, width, height float64) {
 }
 
 func (this *Window) SetPos(x, y float64) {
+	if oldX, oldY := this.widget.Pos(); oldX != x || oldY != y {
+		this.dismissOwnedPopups()
+	}
 	// 完整数据流程参见Widget.SetPos
 	// 此方法负责把坐标传给系统API, 不能反过来调用Widget.SetPos
 
@@ -627,7 +642,7 @@ func (this *Window) SetPos(x, y float64) {
 	// 转换为系统层面的父窗口的客户区坐标
 	var xc, yc float64
 	hParent := win32.GetParent(this.hWnd)
-	if hParent != 0 {
+	if this.wt == WtChild && hParent != 0 {
 		x1, y1, _ := win32.ScreenToClient(hParent, int(xg), int(yg))
 		xc, yc = float64(x1), float64(y1)
 	} else {
@@ -669,6 +684,9 @@ func (this *Window) FrameMargin() (ret Padding) {
 }
 
 func (this *Window) SetSize(w, h float64) {
+	if this.widget.Width() != w || this.widget.Height() != h {
+		this.dismissOwnedPopups()
+	}
 	// 完整数据流程参见Widget.SetSize
 	// 此方法负责把坐标传给系统API, 不能反过来调用Windeget.SetSize
 	// core.Debug("(this *Window) SetSize()", w, h)
@@ -682,11 +700,15 @@ func (this *Window) SetSize(w, h float64) {
 
 func (win *Window) on_WM_SIZE(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	if wParam == win32.SIZE_MINIMIZED {
+		win.dismissOwnedPopups()
 		return 0
 	}
 
 	w := float64(win32.LOWORD(uint32(lParam)))
 	h := float64(win32.HIWORD(uint32(lParam)))
+	if win.widget.Width() != w || win.widget.Height() != h {
+		win.dismissOwnedPopups()
+	}
 	win.widget.NakedWidget().setSize(w, h)
 	return 0
 }
@@ -694,14 +716,13 @@ func (win *Window) on_WM_SIZE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 func (win *Window) on_WM_MOVE(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 
 	xc, yc := posFromLParam(lParam)
-	m := win.FrameMargin()
-	xc += m.L
-	yc += m.T
 
 	// 转换为全局坐标
 	var xg, yg float64
 	hParent := win32.GetParent(win.hWnd)
-	if hParent != 0 {
+	// WM_MOVE already reports the client origin in screen coordinates for
+	// forms/popups; only real WS_CHILD windows use parent-client coordinates.
+	if win.wt == WtChild && hParent != 0 {
 		x1, y1 := win32.ClientToScreen(hParent, int(xc), int(yc))
 		xg, yg = float64(x1), float64(y1)
 	} else {
@@ -716,15 +737,24 @@ func (win *Window) on_WM_MOVE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 		x, y = xg, yg
 	}
 
+	if oldX, oldY := win.widget.Pos(); oldX != x || oldY != y {
+		win.dismissOwnedPopups()
+	}
 	win.widget.NakedWidget().setPos(x, y)
 	return 0
 }
 
 func (this *Window) Update() {
+	if this.hWnd == 0 {
+		return
+	}
 	win32.InvalidateRect(this.hWnd, nil, false)
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {
+	if this.hWnd == 0 {
+		return
+	}
 	//core.MoreDebug(x, y, width, height)
 	rect := &win32.RECT{int32(x), int32(y), int32(x + width), int32(y + height)}
 	win32.InvalidateRect(this.hWnd, rect, false)
@@ -949,6 +979,7 @@ func drawWidgetOverlay(iw IWidget, g paint.Painter) (ok bool) {
 	if ida, ok := iw.(IDrawOverlay); ok {
 		ida.DrawOverlay(g)
 	}
+	drawToastOverlay(iw, g)
 	if core.IsDebugOn() {
 		g.SetPen1(paint.Color{255, 127, 0, 64}, 1)
 		_, _, w, h := iw.Bounds()
@@ -1023,12 +1054,27 @@ func (this *Window) IsVisible() bool {
 }
 
 func (this *Window) setVisible(b bool) {
+	if !b {
+		this.dismissOwnedPopups()
+		if this.wt == WtPopup && this.widget != nil {
+			popups := map[IWidget]bool{this.widget: true}
+			clearPopupInput(popups, this.popupRestoreFocus, widgetWithinPopups(focusWidget, popups))
+		}
+	}
 	//core.Debug("enter (this *Window) setVisible(), hwnd=", fmt.Sprintf("%08X", this.hWnd))
 	if b == this.IsVisible() {
 		return
 	}
 	if b {
-		win32.ShowWindow(this.hWnd, win32.SW_SHOW)
+		if this.wt == WtPopup {
+			this.refreshPopupOwner()
+			if focusWidget != this.widget {
+				this.popupRestoreFocus = focusWidget
+			}
+			win32.ShowWindow(this.hWnd, win32.SW_SHOWNOACTIVATE)
+		} else {
+			win32.ShowWindow(this.hWnd, win32.SW_SHOW)
+		}
 	} else {
 		win32.ShowWindow(this.hWnd, win32.SW_HIDE)
 	}
@@ -1181,6 +1227,9 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		// not move focus. Both have to run ahead of focus routing: a focused
 		// CodeEditor would otherwise eat Ctrl+Z for its own undo first.
 		repeat := 0x40000000&lParam != 0
+		if win.dispatchEscape(int(wParam), repeat) {
+			return 0
+		}
 		if !repeat && dispatchShortcut(int(wParam)) {
 			return 0
 		}
@@ -1188,7 +1237,7 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 			// A focused widget may claim Tab for itself (see IWantsTab): the
 			// design canvas walks the widgets it is editing, which is the only
 			// keyboard route to one of them.
-			if i, ok := focusWidget.(IWantsTab); ok && i.WantsTab(IsKeyDown(KeyShift)) {
+			if i, ok := win.keyTarget().(IWantsTab); ok && i.WantsTab(IsKeyDown(KeyShift)) {
 				return 0
 			}
 			if next := nextFocusable(win.widget, focusWidget, !IsKeyDown(KeyShift)); next != nil {
@@ -1196,7 +1245,7 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 			}
 			return 0
 		}
-		if i, ok := focusWidget.(IEventKeyDown); ok {
+		if i, ok := win.keyTarget().(IEventKeyDown); ok {
 			i.OnKeyDown(int(wParam), repeat)
 		}
 
@@ -1268,8 +1317,14 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 				activeForm = win
 			}
 		}
+		if win32.LOWORD(uint32(wParam)) == win32.WA_INACTIVE {
+			win.queuePopupFocusCheck()
+		}
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_ACTIVATEAPP:
+		if wParam == 0 {
+			win.dismissOwnedPopups()
+		}
 		hackPaintActiveDecorator(hWnd, wParam)
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_NCACTIVATE:
@@ -1324,6 +1379,9 @@ func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr)
 }
 func (win *Window) on_WM_SHOWWINDOW(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	visible := wParam != 0
+	if !visible {
+		win.dismissOwnedPopups()
+	}
 	win.widget.(iWidget).setVisible(visible)
 	if !visible && win.closeOnHide {
 		win.Close()
@@ -1336,9 +1394,10 @@ func (win *Window) on_WM_LBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 	lastMouseTime = time.Now()
 	win.toCapture = true
 	x, y := posFromLParam(lParam)
-	if lastMouseWidget == nil {
+	if curCapture() == nil {
 		p := win.widget.FindWidgetAt(x, y)
 		lastMouseWidget = p
+		setMouseHoverWidget(p)
 	}
 	if lastMouseWidget != nil {
 		x1, y1 := lastMouseWidget.MapFromWindow(x, y)
@@ -1383,9 +1442,10 @@ func (win *Window) on_WM_RBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 	lastMouseTime = time.Now()
 	win.toCapture = true
 	x, y := posFromLParam(lParam)
-	if lastMouseWidget == nil {
+	if curCapture() == nil {
 		p := win.widget.FindWidgetAt(x, y)
 		lastMouseWidget = p
+		setMouseHoverWidget(p)
 	}
 	if lastMouseWidget != nil {
 		x1, y1 := lastMouseWidget.MapFromWindow(x, y)
@@ -1432,8 +1492,9 @@ func (win *Window) on_WM_RBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 func (win *Window) on_WM_MBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	lastMouseTime = time.Now()
 	x, y := posFromLParam(lParam)
-	if lastMouseWidget == nil {
+	if curCapture() == nil {
 		lastMouseWidget = win.widget.FindWidgetAt(x, y)
+		setMouseHoverWidget(lastMouseWidget)
 	}
 	if lastMouseWidget != nil {
 		if i, ok := lastMouseWidget.(IEventMiddleDown); ok {
@@ -1827,10 +1888,7 @@ func AnyWindowId() (ret WinId) {
 }
 
 func KeyState(key int) (down, checked bool) {
-	state := win32.GetKeyState(key)
-	down = state&0x0100 != 0
-	checked = state&0x0001 != 0
-	return
+	return decodeWin32KeyState(win32.GetKeyState(key))
 }
 
 func IsKeyDown(key int) bool {

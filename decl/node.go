@@ -32,7 +32,7 @@ type Node struct {
 
 // Prop is a named value attached to a Node.
 //
-// We keep the Value interface sealed (the four implementations live in
+// We keep the Value interface sealed (the implementations live in
 // this file) so unknown value variants can never sneak through serialisation
 // — a future Bind type, for example, has to add an explicit codec branch
 // rather than silently ride along as an opaque blob.
@@ -57,6 +57,16 @@ type Lit struct {
 
 func (Lit) isValue() {}
 
+// Persisted carries a designer property encoded with core.PersistString.
+// Unlike Lit, its target type is obtained from core.IEnumProperties at Build
+// time. This preserves empty strings, named scalar types and exact RGBA colors
+// without guessing types or treating user text as an executable expression.
+type Persisted struct {
+	Source string
+}
+
+func (Persisted) isValue() {}
+
 // Ref names another Go identifier — typically an event handler bound by
 // the host code at runtime. The serialised form is "@ref:<name>". Decl
 // itself does no resolution; consumers (the runtime widget builder, code
@@ -79,9 +89,9 @@ func (Bind) isValue() {}
 
 // Expr carries an opaque Go expression source — for properties whose
 // value cannot be reduced to a literal at design time. The designer
-// renders these as "code only" placeholders; the Go emitter reproduces
-// the expression verbatim. Expr is the "escape hatch" that keeps decl
-// from forcing every author into a strict-subset DSL.
+// renders these as "code only" placeholders; ToGo preserves the source as
+// quoted data in decl.Expr, never executable Go. Build skips the expression;
+// only an explicit host integration may resolve it.
 type Expr struct {
 	Source string
 }

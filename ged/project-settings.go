@@ -9,6 +9,7 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/ide/kits"
 	"github.com/uk0/silk/paint"
 )
@@ -409,7 +410,7 @@ func (this *ProjectSettingsPanel) Refresh() {
 // ---------------------------------------------------------------------------
 
 const (
-	psHeaderH  = 26.0
+	psHeaderH  = 52.0
 	psRowH     = 36.0
 	psLabelW   = 120.0
 	psPadLeft  = 10.0
@@ -431,10 +432,10 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 	g.Fill()
 
 	// Header
-	g.SetBrush1(paint.Color{235, 238, 245, 255})
+	g.SetBrush1(t.FormColor)
 	g.Rectangle(0, 0, w, psHeaderH)
 	g.Fill()
-	g.SetPen1(paint.Color{200, 200, 210, 255}, 1)
+	g.SetPen1(t.BorderColor, 1)
 	g.MoveTo(0, psHeaderH)
 	g.LineTo(w, psHeaderH)
 	g.Stroke()
@@ -442,28 +443,30 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 	titleFont := paint.NewFont(t.Font.Family(), 12, true, false)
 	g.SetFont(titleFont)
 	g.SetBrush1(t.TextColor)
-	g.DrawText1(8, psHeaderH-7, "Project Settings")
+	g.DrawText1(8, 20, i18n.T("Project Settings"))
 
-	// Module summary: one-line "Module: <path> • Go <ver> • <N> requires"
-	// rendered right-aligned in the header so the parsed go.mod is visible
-	// even before the user scrolls through individual rows.
+	// A separate clipped subtitle keeps long module paths out of the title.
 	summary := this.goModSummary
 	if summary == "" {
 		summary = goModSummaryString(this.goMod)
 	}
+	// The SDK's minimal font set need not include the decorative bullet glyph.
+	summary = strings.ReplaceAll(summary, " • ", "  |  ")
 	summaryFont := paint.NewFont(t.Font.Family(), 11, false, false)
 	g.SetFont(summaryFont)
-	g.SetBrush1(paint.Color{90, 95, 110, 255})
-	sext := summaryFont.TextExtents(summary)
-	sx := w - sext.Width - 8
-	if sx < 120 {
-		sx = 120
-	}
-	g.DrawText1(sx, psHeaderH-7, summary)
+	g.SetBrush1(t.TextColor)
+	g.Save()
+	g.Rectangle(8, 26, math.Max(0, w-16), 22)
+	g.Clip()
+	g.DrawText1(8, 42, summary)
+	g.Restore()
 
 	// Rows
 	labelFont := paint.NewFont(t.Font.Family(), 11, true, false)
 	valueFont := paint.NewFont(t.Font.Family(), 11, false, false)
+	g.Save()
+	g.Rectangle(0, psHeaderH, math.Max(0, w), math.Max(0, h-psHeaderH))
+	g.Clip()
 
 	for i, row := range this.rows {
 		ry := psHeaderH + float64(i)*psRowH + psRowPadY - this.scrollY
@@ -473,7 +476,7 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 
 		// Hover highlight
 		if i == this.hoverIdx {
-			g.SetBrush1(paint.Color{230, 235, 245, 255})
+			g.SetBrush1(t.FormColor)
 			g.Rectangle(0, ry, w, psRowH)
 			g.Fill()
 		}
@@ -492,7 +495,7 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 
 		if i == this.editingIdx {
 			// Editing mode: show the edit buffer with a highlighted background
-			g.SetBrush1(paint.Color{255, 255, 255, 255})
+			g.SetBrush1(t.ViewBGColor)
 			g.Rectangle(valX-2, ry+4, valW+4, psRowH-8)
 			g.FillPreserve()
 			g.SetPen1(t.HighLightColor, 1.5)
@@ -506,7 +509,7 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 			if row.Editable {
 				g.SetBrush1(t.HighLightColor)
 			} else {
-				g.SetBrush1(paint.Color{120, 120, 130, 255})
+				g.SetBrush1(t.TextColor)
 			}
 			displayVal := row.Value
 			if row.Editable && displayVal == "" {
@@ -516,7 +519,7 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 		}
 
 		// Row separator
-		g.SetPen1(paint.Color{230, 230, 235, 100}, 0.5)
+		g.SetPen1(t.BorderColor, 0.5)
 		g.MoveTo(0, ry+psRowH)
 		g.LineTo(w, ry+psRowH)
 		g.Stroke()
@@ -537,6 +540,7 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 		rext := labelFont.TextExtents(refLabel)
 		g.DrawText1(btnX+(btnW-rext.Width)/2, btnY+btnH*0.65, refLabel)
 	}
+	g.Restore()
 }
 
 // ---------------------------------------------------------------------------

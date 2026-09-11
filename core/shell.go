@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"path/filepath"
+	"sync"
 )
 
 var resourceDir string
@@ -14,6 +15,7 @@ var appRootDir string
 var dbgToolDir string
 var startUpDir string
 var tmpDir string
+var resourceDirOnce, localDataDirOnce, workspaceDirOnce, tmpDirOnce sync.Once
 
 func CopyFile(dst, src string) (err error) {
 	sfi, err := os.Stat(src)
@@ -68,46 +70,42 @@ func copyFileContents(dst, src string) (err error) {
 
 // 静态数据目录
 // 用来存放图标, 语言包等和程序一起发布的静态数据
-// 在目前的版本里, 此目录等于程序所在目录
-// 但在编写代码时, 请不要用程序所在目录代替此目录, 因为以后会改变
+// SILK_RESOURCE_DIR 可指定资源目录；默认支持 macOS Contents/Resources、
+// 可执行文件旁资源，以及开发时的当前目录和 GOPATH/bin。只读，不存放用户数据。
 func ResourceDir() string {
-	if resourceDir == "" {
-		resourceDir = AppInstallDir()
-	}
-	// exe目录下没有资源时, 按优先级查找
-	_, err := os.Stat(resourceDir + "/icon")
-	if err != nil {
-		// 1. 尝试当前工作目录 (go run 开发模式)
-		cwd, cwdErr := os.Getwd()
-		if cwdErr == nil {
-			if _, e := os.Stat(cwd + "/icon"); e == nil {
-				resourceDir = cwd
-				Debug(`use resource dir (cwd) = "` + resourceDir + `"`)
-				return resourceDir
-			}
-		}
-		// 2. 尝试 GOPATH/bin
-		s := os.Getenv("GOPATH")
-		if s != "" {
-			_, err := os.Stat(s + "/bin/icon")
-			if err == nil {
-				resourceDir = s + "/bin"
-				Debug(`use resource dir = "` + resourceDir + `"`)
-			}
-		}
-	}
+	resourceDirOnce.Do(func() {
+		cwd, _ := os.Getwd()
+		resourceDir = resolveResourceDir(AppInstallDir(), cwd, os.Getenv("GOPATH"), os.Getenv("SILK_RESOURCE_DIR"))
+	})
 	return resourceDir
 }
 
 // 本机用户设置目录
 // 用来存放和工区无关用户设置, 例如用户习惯, 窗口位置等
-// 在目前的版本里, 此目录等于ExeFileDir()+"/local"
-// 但在编写代码时, 请不要用(ExeFileDir()+"/local")代替此目录, 因为以后会改变
+// 默认位于 os.UserConfigDir()/silk/<程序名>，不再修改安装目录。
+// 便携部署可在启动前设置 SILK_DATA_DIR 指向原有 local 目录。
+// 目录创建错误会报告到 stderr；调用方仍须处理具体文件读写错误。
 func LocalDataDir() string {
-	if localDataDir == "" {
-		localDataDir = ExeFileDir() + "/local"
-		os.Mkdir(localDataDir, os.ModeDir)
-	}
+	localDataDirOnce.Do(func() {
+		var err error
+		localDataDir = os.Getenv("SILK_DATA_DIR")
+		if localDataDir == "" {
+			var base string
+			base, err = os.UserConfigDir()
+			if err == nil {
+				localDataDir = filepath.Join(base, "silk", AppShortName())
+			} else {
+				// No configured home: use a private process directory, never cwd
+				// or a shared predictable directory in /tmp.
+				fmt.Fprintln(os.Stderr, "silk: user configuration unavailable; using temporary data:", err)
+				localDataDir = TempDir()
+			}
+		}
+		localDataDir, err = preparePrivateDir(localDataDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "silk: local data directory:", err)
+		}
+	})
 	return localDataDir
 }
 
@@ -115,20 +113,23 @@ func LocalDataDir() string {
 // 在目前的版本里, 此目录等于程序所在目录
 // 但在编写代码时, 请不要用程序所在目录代替此目录, 因为以后会改变
 func AppInstallDir() string {
-	if appRootDir == "" {
-		appRootDir = ExeFileDir()
-	}
-	return appRootDir
+	return ExeFileDir()
 }
 
 // 本机工作区目录
-// 在目前的版本里, 此目录等于ExeFileDir()+"/workspace"
-// 但在编写代码时, 请不要用(ExeFileDir()+"/workspace")代替此目录, 因为以后会改变
+// 默认位于 LocalDataDir()/workspace；SILK_WORKSPACE_DIR 可保留便携部署路径。
 func WorkspaceDir() string {
-	if workspaceDir == "" {
-		workspaceDir = ExeFileDir() + "/workspace"
-		os.Mkdir(workspaceDir, os.ModeDir)
-	}
+	workspaceDirOnce.Do(func() {
+		workspaceDir = os.Getenv("SILK_WORKSPACE_DIR")
+		if workspaceDir == "" {
+			workspaceDir = filepath.Join(LocalDataDir(), "workspace")
+		}
+		var err error
+		workspaceDir, err = preparePrivateDir(workspaceDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "silk: workspace directory:", err)
+		}
+	})
 	return workspaceDir
 }
 
@@ -142,11 +143,16 @@ func DbgToolDir() string {
 }
 
 // 软件使用的临时文件目录
-// 在目前的版本里, 此目录等于 os.TempDir()+"/" + AppShortName()
+// 每个进程使用独立的 0700 目录，避免多个用户或应用实例相互覆盖。
 func TempDir() string {
-	if tmpDir == "" {
-		tmpDir = strings.Replace(os.TempDir()+"/"+AppShortName(), `\`, `/`, -1)
-		os.Mkdir(tmpDir, os.ModeDir)
-	}
+	tmpDirOnce.Do(func() {
+		var err error
+		tmpDir, err = os.MkdirTemp("", "silk-"+AppShortName()+"-")
+		if err != nil {
+			// This API cannot return an error. Do not return "" and let callers
+			// accidentally write temporary data into their working directory.
+			panic(fmt.Errorf("silk: create temporary directory: %w", err))
+		}
+	})
 	return tmpDir
 }

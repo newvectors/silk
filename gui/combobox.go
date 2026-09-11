@@ -113,7 +113,6 @@ func (this *ComboBox) Init(iw IWidget) {
 	edit := NewEdit()
 	edit.SetPadding(Padding{})
 	edit.SetNoFrame(true)
-	edit.SetText("中文测试")
 	this.SetEditWidget(edit)
 
 	list := new(comboPopup)
@@ -129,6 +128,11 @@ func (this *ComboBox) Init(iw IWidget) {
 }
 
 func (this *ComboBox) SetEditWidget(edit IEdit) {
+	if this.edit != nil && this.edit != edit && this.edit.Parent() == this {
+		// Replacing the editor must detach the old child, otherwise both
+		// editors keep rendering/hit-testing over the same field.
+		this.edit.SetParent(nil)
+	}
 	this.edit = edit
 	if edit != nil {
 		edit.SetParent(this)
@@ -176,11 +180,33 @@ func (this *ComboBox) IsHover() bool {
 }
 
 func (this *ComboBox) Draw(g paint.Painter) {
+	theme := Theme()
 	g.Rectangle(0, 0, this.w, this.h)
-	g.SetBrush1(Theme().ViewBGColor)
+	g.SetBrush1(theme.ViewBGColor)
 	g.Fill()
 
-	Theme().DrawEditFrame(g, 0, 0, this.w, this.h, this.HasFocus(), this.IsHover(), false)
+	theme.DrawEditFrame(g, 0, 0, this.w, this.h, this.HasFocus(), this.IsHover(), false)
+	// ClientRect reserves 22px for the dropdown affordance. Draw in that
+	// region rather than relying on an external bitmap that may be absent or
+	// unreadable in dark mode; the editable child never covers this path.
+	right := this.w - theme.EditPadding.R
+	left := right - 22
+	if left < theme.EditPadding.L {
+		left = theme.EditPadding.L
+	}
+	if right-left < 10 || this.h < 8 {
+		return
+	}
+	x, y := (left+right)*0.5, this.h*0.5
+	ink := theme.TextColor
+	if !this.IsEnabled() {
+		ink = paint.CurrentIconPalette().Disabled
+	}
+	g.MoveTo(x-4, y-2)
+	g.LineTo(x, y+2)
+	g.LineTo(x+4, y-2)
+	g.SetPen1(ink, 1.5)
+	g.Stroke()
 }
 
 func (this *ComboBox) OnMouseEnter() {
@@ -266,18 +292,31 @@ func (this *ComboBox) Append(a ListItem) {
 
 func (this *ComboBox) Insert(idx int, a ListItem) {
 	this.sub.Insert(idx, a)
+	if this.activeIndex >= idx {
+		this.SetActiveIndex(this.activeIndex + 1)
+	}
 }
 
 func (this *ComboBox) Remove(idx int) ListItem {
-	return this.sub.Remove(idx)
+	item := this.sub.Remove(idx)
+	if idx == this.activeIndex {
+		this.SetActiveIndex(-1)
+	} else if idx < this.activeIndex {
+		this.SetActiveIndex(this.activeIndex - 1)
+	}
+	return item
 }
 
 func (this *ComboBox) RemoveLast() ListItem {
-	return this.sub.RemoveLast()
+	if this.Count() == 0 {
+		return ListItem{}
+	}
+	return this.Remove(this.Count() - 1)
 }
 
 func (this *ComboBox) Clear() {
 	this.sub.Clear()
+	this.SetActiveIndex(-1)
 }
 
 func (this *ComboBox) ItemList() (ret []ListItem) {
@@ -290,6 +329,9 @@ func (this *ComboBox) Item(idx int) ListItem {
 
 func (this *ComboBox) SetItem(idx int, item ListItem) {
 	this.sub.SetItem(idx, item)
+	if idx == this.activeIndex {
+		this.SetActiveIndex(idx)
+	}
 }
 
 func (this *ComboBox) Count() int {
@@ -301,19 +343,14 @@ func (this *ComboBox) ActiveIndex() int {
 }
 
 func (this *ComboBox) ActiveItem() ListItem {
-	return this.sub.ActiveItem()
+	if this.activeIndex < 0 || this.activeIndex >= this.Count() {
+		return ListItem{}
+	}
+	return this.Item(this.activeIndex)
 }
 
 func (this *ComboBox) onListSubmit() {
-	if this.edit != nil {
-		this.edit.SetText(this.ActiveItem().Text)
-	}
-	if this.sub.ActiveIndex() != this.activeIndex {
-		this.activeIndex = this.sub.ActiveIndex()
-		if this.sigSelectionChanged != nil {
-			this.sigSelectionChanged(this.Self(), this.activeIndex)
-		}
-	}
+	this.SetActiveIndex(this.sub.ActiveIndex())
 	if this.sigSubmit != nil {
 		this.sigSubmit(this.Self())
 	}
@@ -335,18 +372,53 @@ func (this *ComboBox) setActiveIndex(idx int) {
 	if idx >= n {
 		idx = n - 1
 	}
-	this.sub.activeIndex = idx
-	if idx == this.activeIndex {
-		return
+	this.SetActiveIndex(idx)
+}
+
+// SetActiveIndex commits a selection and updates the editor. -1 (or an
+// out-of-range index) clears it. SelectionChanged fires once on an index
+// change; programmatic selection never emits Submit.
+func (this *ComboBox) SetActiveIndex(idx int) {
+	if idx < -1 || idx >= this.Count() {
+		idx = -1
 	}
+	this.sub.activeIndex = idx
+	changed := idx != this.activeIndex
 	this.activeIndex = idx
 	if this.edit != nil {
-		this.edit.SetText(this.sub.Item(idx).Text)
+		this.edit.SetText(this.ActiveItem().Text)
 	}
-	if this.sigSelectionChanged != nil {
+	if changed && this.sigSelectionChanged != nil {
 		this.sigSelectionChanged(this.Self(), this.activeIndex)
 	}
+	this.sub.Update()
 	this.Self().Update()
+}
+
+// Items returns a copy of the display strings. For icons or application data,
+// use ItemList/Append with ListItem instead.
+func (this *ComboBox) Items() []string { return this.itemTexts() }
+
+// SetItems replaces plain-text items and clears the current selection.
+func (this *ComboBox) SetItems(items []string) {
+	this.sub.Clear()
+	for _, text := range items {
+		this.sub.Append(ListItem{Text: text})
+	}
+	this.SetActiveIndex(-1)
+}
+
+func (this *ComboBox) Text() string {
+	if this.edit != nil {
+		return this.edit.Text()
+	}
+	return this.ActiveItem().Text
+}
+
+func (this *ComboBox) SetText(text string) {
+	if this.edit != nil {
+		this.edit.SetText(text)
+	}
 }
 
 // OnKeyDown implements Qt QComboBox keyboard navigation. When the dropdown is
@@ -444,6 +516,9 @@ func (this *ComboBox) SigSelectionChanged(fn func(o interface{}, idx int)) {
 func (this *ComboBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
+	list.AddProperty("items", this.Items, this.SetItems)
+	list.AddProperty("selectedIndex", this.ActiveIndex, this.SetActiveIndex)
+	list.AddProperty("text", this.Text, this.SetText)
 }
 
 func (this *ComboBox) SigSubmit(fn func(o interface{})) {

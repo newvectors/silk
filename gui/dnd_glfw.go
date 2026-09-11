@@ -141,8 +141,12 @@ func (this *Window) DoDragDrop(from interface{},
 
 	for dragging {
 		glfw.PollEvents()
+		serviceUIFrame()
+		if shouldQuit || this.glfwWin == nil {
+			break
+		}
 
-		// Get current global mouse position
+		// Use the latest delivered pointer event, including during this loop.
 		mx, my := MousePosition()
 
 		// Find the widget under the cursor

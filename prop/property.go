@@ -11,6 +11,8 @@ import (
 	//	"io/ioutil"
 	//	"os"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -320,7 +322,15 @@ type PropertyConfigFile struct {
 var configFileCache = make(map[string]*PropertyConfigFile)
 
 func propertyConfigFilePath(name string) string {
-	return core.ResourceDir() + "/property/" + name + ".cml"
+	return filepath.Join(core.LocalDataDir(), "property", name+".cml")
+}
+
+func loadPropertyConfigFile(userPath, resourcePath string) (*core.TDoc, error) {
+	doc, err := core.LoadTDocFile(userPath)
+	if os.IsNotExist(err) {
+		return core.LoadTDocFile(resourcePath)
+	}
+	return doc, err
 }
 
 func GetPropertyConfigFile(name string, fallbackToDefault bool) *PropertyConfigFile {
@@ -329,11 +339,11 @@ func GetPropertyConfigFile(name string, fallbackToDefault bool) *PropertyConfigF
 	if !ok {
 		var doc *core.TDoc
 		var err error
-		if name == "" {
-			err = errors.New(`property config "" is not valid `)
+		if !validPropertyConfigName(name) {
+			err = fmt.Errorf("invalid property config name %q", name)
 		} else {
-			path := propertyConfigFilePath(name)
-			doc, err = core.LoadTDocFile(path)
+			doc, err = loadPropertyConfigFile(propertyConfigFilePath(name),
+				filepath.Join(core.ResourceDir(), "property", name+".cml"))
 		}
 
 		if err == nil {
@@ -348,11 +358,10 @@ func GetPropertyConfigFile(name string, fallbackToDefault bool) *PropertyConfigF
 			}
 			pf = GetPropertyConfigFile("default", false)
 		} else if name == "default" {
-			core.Warn(err, ` (empty file generated)`)
+			core.Debug(err, ` (using empty in-memory property defaults)`)
 			pf = new(PropertyConfigFile)
 			pf.name = "default"
 			pf.doc = core.NewTDoc()
-			pf.Save()
 		} else {
 			core.Warn(err)
 		}
@@ -392,7 +401,24 @@ func (this *PropertyConfigFile) Inherit() *PropertyConfigFile {
 }
 
 func (this *PropertyConfigFile) Save() error {
-	return this.doc.SaveFile(propertyConfigFilePath(this.name))
+	if !validPropertyConfigName(this.name) {
+		return fmt.Errorf("invalid property config name %q", this.name)
+	}
+	return savePropertyConfigFile(this.doc, propertyConfigFilePath(this.name))
+}
+
+func validPropertyConfigName(name string) bool {
+	return core.IsValidFileName(name) && name != "." && name != ".." && !strings.HasSuffix(name, ".")
+}
+
+func savePropertyConfigFile(doc *core.TDoc, path string) error {
+	if doc == nil {
+		return errors.New("cannot save nil property configuration")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return doc.SaveFile(path)
 }
 
 func (this *PropertyConfigFile) InheritName() (s string) {
@@ -1146,6 +1172,16 @@ func (s sortProps) Less(i, j int) bool {
 
 func (s sortProps) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
+}
+
+// RefreshValues updates existing controls after a canvas move/resize or undo.
+// It preserves category/filter state and does not rebuild controls or history.
+func (this *PropertySheet) RefreshValues() {
+	for _, item := range this.rlist {
+		item.multiValue = classifyRow(this.objCount, item.prop.owners, item.prop.mixedType, item.prop.values()) == rowMulti
+		item.UpdateControlValue()
+	}
+	this.Update()
 }
 
 func (this *PropertySheet) Bind(objs []interface{}, configName string, owner interface{}) {

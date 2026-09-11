@@ -565,9 +565,48 @@ func (this *ResizeDecor) OnEndMoveHandle(handle int, x, y float64) {
 
 	}
 	if cmd.Count() > 0 {
+		appendResizeCarriedChildren(cmd)
 		this.Scene().PushCommand(cmd)
 	}
 
+}
+
+// appendResizeCarriedChildren preserves child-local offsets when a left/top
+// resize moves an absolute-coordinate container's origin. Explicitly resized
+// selections keep their own records; locally positioned or layout-managed
+// descendants follow their parent automatically and must not be moved twice.
+func appendResizeCarriedChildren(cmd *ResizeCommand) {
+	direct := cmd.records
+	explicit := make(map[IItem]bool, len(direct))
+	for _, record := range direct {
+		explicit[record.item] = true
+	}
+	for _, record := range direct {
+		dx, dy := record.rect.X-record.item.X(), record.rect.Y-record.item.Y()
+		if dx == 0 && dy == 0 {
+			continue
+		}
+		var carry func(IItem)
+		carry = func(parent IItem) {
+			if parent.HasLocalCoord() {
+				return
+			}
+			if manager, ok := parent.(interface{ ManagesChildGeometry() bool }); ok && manager.ManagesChildGeometry() {
+				return
+			}
+			for _, child := range parent.Children() {
+				if explicit[child] {
+					continue
+				}
+				bounds := child.Bounds1()
+				bounds.X += dx
+				bounds.Y += dy
+				cmd.AddItem(child, bounds)
+				carry(child)
+			}
+		}
+		carry(record.item)
+	}
 }
 
 //func (this *ResizeDecor) OnReleaseHandle(handle int, x, y float64) {

@@ -67,7 +67,9 @@ var (
 	focusWidget      IWidget
 	activeForm       *Window
 	captureStack     []IWidget
-	screenDpi        float64
+	screenDpi        float64 = 96
+	glfwReady        bool
+	glfwInitErr      error
 	shouldQuit       bool
 	glfwMu           sync.Mutex
 
@@ -115,11 +117,18 @@ type Window struct {
 	// blit (see gl_overlay.go / gl_overlay_glfw.go).
 	glOverlays []chartOverlay
 
+	pointer      pointerEventState
 	mouseEntered bool
 	autoCaptured bool
 	toCapture    bool
 	inModal      bool
 	closeOnHide  bool
+	// GLFW's shared GL context is not a native owner relationship. Keep the
+	// actual popup owner so transient windows cannot outlive its geometry or
+	// visibility, and remember logical focus for keyboard routing on dismiss.
+	popupOwner             *Window
+	popupRestoreFocus      IWidget
+	popupFocusCheckPending bool
 
 	// pendingPopupPos stores the global screen position set by
 	// setPopupGlobalPos before the window is shown. On macOS,
@@ -145,30 +154,67 @@ func init() {
 	uiThreadId = currentThreadId()
 	uiThreadOwner = func() bool { return currentThreadId() == uiThreadId }
 
-	if err := glfw.Init(); err != nil {
-		panic("failed to init GLFW: " + err.Error())
+	// Importing the SDK must not require a desktop: model construction and
+	// persistence are also used by generators, servers and headless tests.
+	// Keep the backend registered; an actual native-window/loop request below
+	// reports the initialization error instead of pretending to run a GUI.
+	core.SetMainLoop(MainLoop, QuitLoop)
+	if runtime.GOOS == "darwin" {
+		// GLFW otherwise chdirs into an app bundle's Contents/Resources,
+		// silently replacing the caller's workspace with bundled resources.
+		glfw.InitHint(glfw.CocoaChdirResources, glfw.False)
 	}
-
-	// Let off-thread Post() callers wake a blocked WaitEvents so their queued
-	// GUI tasks run promptly on the main thread (see uiqueue.go / drainUITasks).
-	SetUIWakeup(glfw.PostEmptyEvent)
-
-	// Get DPI from primary monitor
-	mon := glfw.GetPrimaryMonitor()
-	if mon != nil {
-		sx, _ := mon.GetContentScale()
-		screenDpi = float64(sx) * 96.0
-	}
-	if screenDpi == 0 {
-		screenDpi = 96
+	screenDpi, glfwInitErr = probeGLFWDesktop(glfw.Init, func() float64 {
+		if mon := glfw.GetPrimaryMonitor(); mon != nil {
+			sx, _ := mon.GetContentScale()
+			return float64(sx)
+		}
+		return 1
+	})
+	glfwReady = glfwInitErr == nil
+	if glfwReady {
+		// Only initialized GLFW may be called by off-thread Post() wakeups.
+		SetUIWakeup(glfw.PostEmptyEvent)
 	}
 	core.Debug("Main screen DPI: ", screenDpi)
 
 	initCursors()
 
 	idleTimer.Start(47, onIdleTimer)
+}
 
-	core.SetMainLoop(MainLoop, QuitLoop)
+// The Go GLFW binding can log a platform failure and return nil from Init,
+// then panic with *glfw.Error on the first monitor query. Recover only GLFW
+// errors around this initial probe, never arbitrary application/runtime bugs.
+func probeGLFWDesktop(initialize func() error, contentScale func() float64) (dpi float64, err error) {
+	dpi = 96
+	defer func() {
+		if value := recover(); value != nil {
+			if glfwErr, ok := value.(*glfw.Error); ok {
+				err = fmt.Errorf("GLFW desktop initialization: %w", glfwErr)
+			} else {
+				panic(value)
+			}
+		}
+	}()
+	if err = initialize(); err != nil {
+		return dpi, fmt.Errorf("GLFW desktop initialization: %w", err)
+	}
+	if scale := contentScale(); scale > 0 && !math.IsNaN(scale) && !math.IsInf(scale, 0) {
+		dpi = scale * 96
+	}
+	return dpi, nil
+}
+
+func nativeDesktopError(operation string) error {
+	if glfwReady {
+		return nil
+	}
+	cause := glfwInitErr
+	if cause == nil {
+		cause = core.StrErr("GLFW is not initialized")
+	}
+	return fmt.Errorf("gui: %s requires a native desktop (on Linux configure DISPLAY/X11 or Xvfb): %w", operation, cause)
 }
 
 func setMouseHoverWidget(iw IWidget) {
@@ -231,8 +277,24 @@ func updateCursor() {
 }
 
 func (this *Window) create(p *Window, wt WindowType) error {
+	if err := nativeDesktopError("Window.create"); err != nil {
+		// AttachWindow has no error result in the public API; its caller drops
+		// create errors, so also report this native request explicitly.
+		core.Warn(err)
+		return err
+	}
 	if this.glfwWin != nil {
 		return core.StrErr("win seems already inited.")
+	}
+	if wt == WtPopup {
+		this.popupOwner = p
+		if p == this {
+			this.popupOwner = nil
+			if parent := this.widget.Parent(); parent != nil {
+				this.popupOwner = parent.OwnerWindow()
+			}
+		}
+		this.popupRestoreFocus = focusWidget
 	}
 
 	if p != nil {
@@ -251,7 +313,13 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	switch wt {
 	case WtPopup:
 		glfw.WindowHint(glfw.Decorated, glfw.False)
-		glfw.WindowHint(glfw.Floating, glfw.True)
+		if runtime.GOOS == "darwin" {
+			// Cocoa child ordering, not global floating-window level, keeps
+			// menus above their owner without pinning them over other apps.
+			glfw.WindowHint(glfw.Floating, glfw.False)
+		} else {
+			glfw.WindowHint(glfw.Floating, glfw.True)
+		}
 		glfw.WindowHint(glfw.FocusOnShow, glfw.False)
 	case WtForm:
 		glfw.WindowHint(glfw.Decorated, glfw.True)
@@ -307,6 +375,8 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	// Set up callbacks
 	gw.SetSizeCallback(onWindowResize)
 	gw.SetPosCallback(onWindowMove)
+	gw.SetIconifyCallback(onWindowIconify)
+	gw.SetFocusCallback(onWindowFocus)
 	gw.SetCloseCallback(onWindowClose)
 	gw.SetCursorPosCallback(onCursorPos)
 	gw.SetMouseButtonCallback(onMouseButton)
@@ -330,6 +400,20 @@ func (this *Window) create(p *Window, wt WindowType) error {
 }
 
 func (this *Window) destroy() {
+	this.dismissOwnedPopups()
+	dismissOwnedToasts(this.widget)
+	if this.wt == WtPopup && this.glfwWin != nil {
+		unbindNativePopupOwner(this.glfwWin)
+	}
+	this.clearWindowInput()
+	if this.widget != nil && this.widget.NakedWidget().win == this {
+		// closeOnHide popups may be shown again; a destroyed native Window
+		// must not remain attached and prevent syncWindow from recreating it.
+		// Hide before detaching, or a closed dialog becomes a visible inline
+		// child and is painted by its former owner as a floating remnant.
+		this.widget.NakedWidget().setVisible(false)
+		this.widget.NakedWidget().win = nil
+	}
 	if this.glTexture != 0 {
 		this.glfwWin.MakeContextCurrent()
 		gl.DeleteTextures(1, &this.glTexture)
@@ -356,11 +440,50 @@ func (this *Window) destroy() {
 	this.backPainter = nil
 	this.backBuffer = nil
 	this.widget = nil
+	if pointerWindow == this {
+		pointerWindow = nil
+	}
 	if this.glfwWin != nil {
 		delete(winMap, this.glfwWin)
-		this.glfwWin.Destroy()
+		// Cocoa/GLFW still owns the dispatch stack during a key or close
+		// callback. Freeing that native window here made Cmd+Q use freed
+		// memory on return. Detach now; release after outer event dispatch.
+		native := this.glfwWin
+		pendingNativeDestruction = append(pendingNativeDestruction, native.Destroy)
 		this.glfwWin = nil
 	}
+}
+
+// Release references while the native attachment still identifies this
+// window. After detaching a modal, its hidden children resolve OwnerWindow to
+// the main form and a stale capture would steal all subsequent main-window
+// mouse events. Independent preview/dialog windows are not part of this set.
+func (this *Window) clearWindowInput() {
+	belongs := func(widget IWidget) bool {
+		return widget != nil && widget.OwnerWindow() == this
+	}
+	kept := captureStack[:0]
+	for _, captured := range captureStack {
+		if !belongs(captured) {
+			kept = append(kept, captured)
+		}
+	}
+	clear(captureStack[len(kept):])
+	captureStack = kept
+	if belongs(focusWidget) {
+		focusWidget = nil
+	}
+	if belongs(lastMouseWidget) {
+		lastMouseWidget = nil
+	}
+	if belongs(mouseHoverWidget) {
+		setMouseHoverWidget(nil)
+	}
+	if pointerWindow == this {
+		pointerWindow = nil
+	}
+	this.autoCaptured, this.toCapture, this.mouseEntered = false, false, false
+	this.pointer.valid = false
 }
 
 func (this *Window) getBackBuffer(width, height int) paint.Pixmap {
@@ -684,6 +807,11 @@ func (this *Window) SetBounds(x, y, width, height float64) {
 }
 
 func (this *Window) SetPos(x, y float64) {
+	if this.widget != nil {
+		if oldX, oldY := this.widget.Pos(); oldX != x || oldY != y {
+			this.dismissOwnedPopups()
+		}
+	}
 	xg, yg := x, y
 	pw := this.Widget().Parent()
 	if pw != nil {
@@ -698,7 +826,7 @@ func (this *Window) SetPos(x, y float64) {
 	}
 
 	// In Win32, SetWindowPos triggers WM_MOVE which calls widget.setPos().
-	// GLFW has no position-change callback, so update the widget directly.
+	// Keep local state synchronous; the position callback can arrive later.
 	this.widget.NakedWidget().setPos(x, y)
 }
 
@@ -714,6 +842,9 @@ func (this *Window) FrameMargin() (ret Padding) {
 }
 
 func (this *Window) SetSize(w, h float64) {
+	if this.widget != nil && (this.widget.Width() != w || this.widget.Height() != h) {
+		this.dismissOwnedPopups()
+	}
 	if this.glfwWin != nil {
 		this.glfwWin.SetSize(int(w), int(h))
 		this.dirty = true
@@ -959,6 +1090,7 @@ func drawWidgetOverlay(iw IWidget, g paint.Painter) (ok bool) {
 	if ida, ok := iw.(IDrawOverlay); ok {
 		ida.DrawOverlay(g)
 	}
+	drawToastOverlay(iw, g)
 	if core.IsDebugOn() {
 		g.SetPen1(paint.Color{255, 127, 0, 64}, 1)
 		_, _, w, h := iw.Bounds()
@@ -1034,6 +1166,13 @@ func (this *Window) IsVisible() bool {
 }
 
 func (this *Window) setVisible(b bool) {
+	if !b {
+		this.dismissOwnedPopups()
+		if this.wt == WtPopup && this.widget != nil {
+			popups := map[IWidget]bool{this.widget: true}
+			clearPopupInput(popups, this.popupRestoreFocus, widgetWithinPopups(focusWidget, popups))
+		}
+	}
 	if this.glfwWin == nil {
 		return
 	}
@@ -1041,6 +1180,10 @@ func (this *Window) setVisible(b bool) {
 		return
 	}
 	if b {
+		this.refreshPopupOwner()
+		if this.wt == WtPopup && focusWidget != this.widget {
+			this.popupRestoreFocus = focusWidget
+		}
 		if this.wt == WtPopup && this.hasPendingPos {
 			// ── Popup zero-flicker strategy ──
 			// macOS ignores SetPos on hidden GLFW windows. To avoid the
@@ -1081,11 +1224,142 @@ func (this *Window) setVisible(b bool) {
 			}
 			this.glfwWin.Show()
 		}
+		if this.wt == WtPopup && this.popupOwner != nil && this.popupOwner.glfwWin != nil {
+			// Bind only after the final global position and size are applied.
+			// Cocoa orderOut removes child ownership, so every Show rebinds.
+			bound := bindNativePopupOwner(this.glfwWin, this.popupOwner.glfwWin)
+			if runtime.GOOS == "darwin" {
+				core.Debug("popup native-owner: bound=", bound)
+			}
+		}
 		this.dirty = true
+		this.debugPopupState("show")
 	} else {
+		if this.wt == WtPopup {
+			unbindNativePopupOwner(this.glfwWin)
+		}
 		this.glfwWin.Hide()
+		this.debugPopupState("hide")
 		if this.closeOnHide {
 			this.destroy()
+		}
+	}
+}
+
+func (this *Window) refreshPopupOwner() {
+	if this.wt != WtPopup || this.widget == nil {
+		return
+	}
+	this.popupOwner = nil
+	if parent := this.widget.Parent(); parent != nil {
+		if owner := parent.OwnerWindow(); owner != this {
+			this.popupOwner = owner
+		}
+	}
+}
+
+// Existing SILK_DEBUG diagnostics only: geometry and widget types, never
+// notification text, menu labels, document names or other window contents.
+func (this *Window) debugPopupState(action string) {
+	if this.wt != WtPopup || this.glfwWin == nil || !core.IsDebugOn() {
+		return
+	}
+	var owner IWidget
+	var ox, oy, ow, oh int
+	if this.popupOwner != nil {
+		owner = this.popupOwner.widget
+		if native := this.popupOwner.glfwWin; native != nil {
+			ox, oy = native.GetPos()
+			ow, oh = native.GetSize()
+		}
+	}
+	x, y := this.glfwWin.GetPos()
+	w, h := this.glfwWin.GetSize()
+	core.Debug("popup ", action, ": widget=", reflect.TypeOf(this.widget),
+		", owner=", reflect.TypeOf(owner), ", ownerRect=", ox, ",", oy, ",", ow, "x", oh,
+		", pos=", x, ",", y, ", size=", w, "x", h)
+}
+
+// popupOwnedBy follows only transient ownership, never a WtForm parent chain:
+// an independent preview/dialog and its own menus must survive changes to a
+// different form. Nested menu popups, however, belong to the whole chain.
+func popupOwnedBy(popup, owner *Window) bool {
+	for p := popup; p != nil && p.wt == WtPopup; p = p.popupOwner {
+		if p.popupOwner == owner {
+			return true
+		}
+		if p.popupOwner == p {
+			return false
+		}
+	}
+	return false
+}
+
+func widgetWithinPopups(widget IWidget, popups map[IWidget]bool) bool {
+	for p := widget; p != nil; p = p.Parent() {
+		if popups[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// dismissOwnedPopups uses the normal Hide path (including Menu.OnHide and
+// closeOnHide) rather than destroying reusable ComboBox/Button popup objects.
+// Snapshot before callbacks because hiding can remove windows from winMap.
+func (this *Window) dismissOwnedPopups() {
+	var popups map[IWidget]bool
+	for _, candidate := range winMap {
+		if candidate != this && candidate.widget != nil && popupOwnedBy(candidate, this) {
+			if popups == nil {
+				popups = make(map[IWidget]bool)
+			}
+			popups[candidate.widget] = true
+		}
+	}
+	if len(popups) == 0 {
+		return
+	}
+	core.Debug("popup dismiss: owner=", reflect.TypeOf(this.widget), ", count=", len(popups))
+	var restore IWidget
+	hadPopupFocus := widgetWithinPopups(focusWidget, popups)
+	if hadPopupFocus {
+		for p := focusWidget.OwnerWindow(); p != nil && popupOwnedBy(p, this); p = p.popupOwner {
+			restore = p.popupRestoreFocus
+		}
+	}
+	if currentTooltip != nil && popups[currentTooltip] {
+		HideToolTip()
+	}
+	for popup := range popups {
+		if popup.IsVisible() {
+			popup.Hide()
+		}
+	}
+	clearPopupInput(popups, restore, hadPopupFocus)
+}
+
+func clearPopupInput(popups map[IWidget]bool, restore IWidget, hadPopupFocus bool) {
+	// PopCapture only removes the top of its stack; discard any stale entries
+	// left by callback ordering without touching captures from another form.
+	kept := captureStack[:0]
+	for _, captured := range captureStack {
+		if !widgetWithinPopups(captured, popups) {
+			kept = append(kept, captured)
+		}
+	}
+	clear(captureStack[len(kept):])
+	captureStack = kept
+	if widgetWithinPopups(lastMouseWidget, popups) {
+		lastMouseWidget = nil
+	}
+	if widgetWithinPopups(mouseHoverWidget, popups) {
+		setMouseHoverWidget(nil)
+	}
+	if hadPopupFocus && (focusWidget == nil || widgetWithinPopups(focusWidget, popups)) {
+		focusWidget = nil
+		if restore != nil && !widgetWithinPopups(restore, popups) && restore.IsAllAncentorsVisible() {
+			restore.SetFocus()
 		}
 	}
 }
@@ -1107,6 +1381,9 @@ func (this *Window) NakedWindow() *Window {
 }
 
 func MousePosition() (x, y float64) {
+	if win := pointerWindow; win != nil && win.glfwWin != nil && win.pointer.valid && win.IsVisible() {
+		return win.mapToGlobal(win.pointer.x, win.pointer.y)
+	}
 	for gw, win := range winMap {
 		if win.IsVisible() {
 			cx, cy := gw.GetCursorPos()
@@ -1161,6 +1438,11 @@ func AnyWindowId() (ret WinId) {
 }
 
 func KeyState(key int) (down, checked bool) {
+	if eventModifiers != nil {
+		if held, modifier := modifierKeyState(key, *eventModifiers); modifier {
+			return held, false
+		}
+	}
 	for gw := range winMap {
 		// Any one of the GLFW keys behind this VK counts as down: Ctrl, Shift
 		// and Alt each have a left and a right key, and the user may hold
@@ -1183,14 +1465,18 @@ func IsKeyDown(key int) bool {
 
 func IsMouseLeftDown() bool {
 	for gw := range winMap {
-		return gw.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press
+		if gw.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press {
+			return true
+		}
 	}
 	return false
 }
 
 func IsMouseRightDown() bool {
 	for gw := range winMap {
-		return gw.GetMouseButton(glfw.MouseButtonRight) == glfw.Press
+		if gw.GetMouseButton(glfw.MouseButtonRight) == glfw.Press {
+			return true
+		}
 	}
 	return false
 }
@@ -1204,6 +1490,9 @@ func ShowConsoleWindow() {
 }
 
 func DesktopArea() (x, y, w, h float64) {
+	if !glfwReady {
+		return 0, 0, 1920, 1080
+	}
 	mon := glfw.GetPrimaryMonitor()
 	if mon != nil {
 		vm := mon.GetVideoMode()
@@ -1254,7 +1543,9 @@ func markAllWindowsDirty() {
 		w.dirty = true
 	}
 	// Wake the event loop so the repaint happens promptly.
-	glfw.PostEmptyEvent()
+	if glfwReady {
+		glfw.PostEmptyEvent()
+	}
 }
 
 // serviceUIFrame runs the per-iteration service work an event loop owes the
@@ -1305,6 +1596,11 @@ func serviceUIFrame() {
 //   - When animations are running or the perf overlay is live we use the
 //     classic ~16ms tick so redraws happen smoothly.
 func MainLoop() {
+	if err := nativeDesktopError("MainLoop"); err != nil {
+		// Outside the legacy event-loop recovery: callers must be able to
+		// detect that a native GUI was not started.
+		panic(err)
+	}
 	core.Debug("MainLoop()")
 	defer func() {
 		if e := recover(); e != nil {
@@ -1313,6 +1609,7 @@ func MainLoop() {
 	}()
 
 	if len(winMap) == 0 {
+		flushNativeDestruction()
 		core.Warn("no windows.")
 		return
 	}
@@ -1327,6 +1624,7 @@ func MainLoop() {
 		} else {
 			glfw.WaitEventsTimeout(0.047)
 		}
+		flushNativeDestruction()
 		serviceUIFrame()
 
 		// Request a repaint every iteration while the perf overlay is live or
@@ -1372,6 +1670,9 @@ func MainLoop() {
 		}
 	}
 
+	flushNativeDestruction()
+	SetUIWakeup(nil)
+	glfwReady = false
 	glfw.Terminate()
 }
 
@@ -1408,6 +1709,9 @@ func onWindowResize(gw *glfw.Window, width, height int) {
 	if win == nil || win.widget == nil {
 		return
 	}
+	if win.widget.Width() != float64(width) || win.widget.Height() != float64(height) {
+		win.dismissOwnedPopups()
+	}
 	win.widget.NakedWidget().setSize(float64(width), float64(height))
 	win.dirty = true
 }
@@ -1435,7 +1739,59 @@ func onWindowMove(gw *glfw.Window, xpos, ypos int) {
 	} else {
 		x, y = xg, yg
 	}
+	if oldX, oldY := win.widget.Pos(); oldX != x || oldY != y {
+		win.dismissOwnedPopups()
+	}
 	win.widget.NakedWidget().setPos(x, y)
+}
+
+func onWindowIconify(gw *glfw.Window, iconified bool) {
+	if win := winMap[gw]; win != nil && iconified {
+		win.dismissOwnedPopups()
+	}
+}
+
+// Check after the whole native focus transfer, not in the owner's blur
+// callback: clicking a menu naturally moves focus from its form to a popup.
+// Only when the entire family is unfocused (another app/form is active) may
+// the floating native popups be dismissed.
+func onWindowFocus(gw *glfw.Window, focused bool) {
+	win := winMap[gw]
+	if win == nil {
+		return
+	}
+	if focused {
+		if win.wt == WtForm {
+			activeForm = win
+		}
+		return
+	}
+	owner := win
+	for owner.wt == WtPopup && owner.popupOwner != nil && owner.popupOwner != owner {
+		owner = owner.popupOwner
+	}
+	if owner.popupFocusCheckPending {
+		return
+	}
+	owner.popupFocusCheckPending = true
+	Post(func() {
+		owner.popupFocusCheckPending = false
+		owner.dismissPopupsIfUnfocused(func(candidate *Window) bool {
+			return candidate.glfwWin != nil && candidate.IsVisible() && candidate.glfwWin.GetAttrib(glfw.Focused) == glfw.True
+		})
+	})
+}
+
+func (this *Window) dismissPopupsIfUnfocused(focused func(*Window) bool) {
+	if this.widget == nil || focused(this) {
+		return
+	}
+	for _, candidate := range winMap {
+		if candidate.widget != nil && popupOwnedBy(candidate, this) && focused(candidate) {
+			return
+		}
+	}
+	this.dismissOwnedPopups()
 }
 
 func onWindowClose(gw *glfw.Window) {
@@ -1461,20 +1817,18 @@ func onWindowClose(gw *glfw.Window) {
 	}
 
 	if PromptSaveClose(win.widget, win) {
-		// If this was the main form (or the last form), quit the application
-		formCount := 0
-		for _, w := range winMap {
-			if w.wt == WtForm {
-				formCount++
-			}
-		}
-		if formCount <= 1 {
+		// PromptSaveClose has already removed the closing window from winMap.
+		// A remaining main form must survive closing a preview/tool form.
+		if !hasOpenFormWindow() {
 			core.Quit()
 		}
 	}
 }
 
 func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
+	previousMods := eventModifiers
+	eventModifiers = &mods
+	defer func() { eventModifiers = previousMods }()
 	defer func() {
 		if r := recover(); r != nil {
 			core.Warn("panic in onMouseButton: ", r)
@@ -1492,7 +1846,16 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 		return
 	}
 
-	cx, cy := gw.GetCursorPos()
+	// Cocoa mouseDown/up do not emit a cursor-position callback first.
+	// Prefer their own event coordinates over a stale move or a separately
+	// polled physical pointer (AX/remote input need not move that pointer).
+	cx, cy, fromEvent := mouseButtonEventPosition(win.glfwWin, button, action)
+	if fromEvent {
+		win.pointer = pointerEventState{x: cx, y: cy, valid: true}
+		pointerWindow = win
+	} else {
+		cx, cy = win.pointer.position(gw.GetCursorPos)
+	}
 	x, y := cx, cy
 
 	// Cross-window capture: when a captured widget lives on a different
@@ -1504,6 +1867,18 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 		tx, ty := capWin.mapFromGlobal(mx, my)
 		deliverCapturedMouseButton(capWin, button, action, tx, ty)
 		return
+	}
+	if action == glfw.Press && capWidget == nil {
+		// Clicks can arrive without a cursor-move event after popup/modal
+		// teardown. Resolve both target and hover from this delivered event,
+		// rather than routing to a stale widget or failing Button.IsHover().
+		lastMouseWidget = win.widget.FindWidgetAt(x, y)
+		setMouseHoverWidget(lastMouseWidget)
+	}
+	if button == glfw.MouseButtonLeft && core.IsDebugOn() {
+		core.Debug("mouse left: receiver=", reflect.TypeOf(win.widget), ", action=", action,
+			", event-pos=", fromEvent, ", pos=", x, ",", y, ", target=", reflect.TypeOf(lastMouseWidget),
+			", hover=", reflect.TypeOf(mouseHoverWidget), ", capture=", reflect.TypeOf(capWidget))
 	}
 
 	if action == glfw.Press {
@@ -1698,14 +2073,15 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 			core.Warn("panic in onCursorPos: ", r)
 		}
 	}()
-	if dndActive {
-		return
-	}
 	win := winMap[gw]
 	if win == nil || win.widget == nil {
 		return
 	}
-	if !win.enabled {
+	// The nested drag loop still needs new event coordinates even while
+	// ordinary widget mouse dispatch is suspended.
+	win.pointer = pointerEventState{x: xpos, y: ypos, valid: true}
+	pointerWindow = win
+	if dndActive || !win.enabled {
 		return
 	}
 
@@ -1871,6 +2247,9 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 }
 
 func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
+	previousMods := eventModifiers
+	eventModifiers = &mods
+	defer func() { eventModifiers = previousMods }()
 	defer func() {
 		if r := recover(); r != nil {
 			core.Warn("panic in onKey: ", r)
@@ -1880,6 +2259,10 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	if win == nil {
 		return
 	}
+	if key == glfw.KeyEscape && core.IsDebugOn() {
+		core.Debug("key Escape: receiver=", reflect.TypeOf(win.widget), ", target=", reflect.TypeOf(focusWidget),
+			", enabled=", win.enabled, ", modal=", win.inModal, ", action=", action)
+	}
 	if !win.enabled {
 		return
 	}
@@ -1888,11 +2271,15 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	if vk == 0 {
 		return
 	}
+	if (action == glfw.Press || action == glfw.Repeat) && win.dispatchEscape(vk, action == glfw.Repeat) {
+		core.Debug("key Escape routed: receiver=", reflect.TypeOf(win.widget), ", modal=", win.inModal)
+		return
+	}
 
 	// Global F12: toggle the perf-stats overlay. Handled at the window
 	// layer so it works regardless of which widget has focus (otherwise a
 	// focused CodeEditor would consume the key). Only fires on press.
-	if vk == KeyF12 && action == glfw.Press {
+	if vk == KeyF12 && action == glfw.Press && ShortcutHandler(currentMods(), vk) == nil {
 		GlobalPerfStats.Toggle()
 		return
 	}
@@ -1914,7 +2301,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 		// A focused widget may claim Tab for itself (see IWantsTab): the design
 		// canvas walks the widgets it is editing, which is the only keyboard
 		// route to one of them.
-		if i, ok := focusWidget.(IWantsTab); ok && i.WantsTab(IsKeyDown(KeyShift)) {
+		if i, ok := win.keyTarget().(IWantsTab); ok && i.WantsTab(IsKeyDown(KeyShift)) {
 			return
 		}
 		root := win.widget
@@ -1930,10 +2317,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 
 	// Determine the target widget: use focusWidget if set, otherwise
 	// fall back to the root widget of the window receiving the key event.
-	target := focusWidget
-	if target == nil {
-		target = win.widget
-	}
+	target := win.keyTarget()
 	if target == nil {
 		return
 	}
@@ -1994,6 +2378,7 @@ func onCursorEnter(gw *glfw.Window, entered bool) {
 		return
 	}
 	if !entered {
+		win.pointer.valid = false
 		win.mouseEntered = false
 		// When a capture is active, do NOT clear the hover widget on window
 		// leave. GLFW fires cursor-leave when the pointer moves to a popup
@@ -2135,6 +2520,9 @@ func onIdleTimer() {
 // ---- Modal ----
 
 func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
+	if err := nativeDesktopError("Window.ShowModal"); err != nil {
+		panic(err)
+	}
 	if this.inModal {
 		core.Warn("already modal, cannot ShowModal again")
 		return nil

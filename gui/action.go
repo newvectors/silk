@@ -215,6 +215,9 @@ func (this *Action) BindAction(a IAction) {
 }
 
 func (this *Action) Trigger(sender interface{}) {
+	if !this.IsEnabled() {
+		return
+	}
 	if this.targetAction != nil {
 		this.targetAction.Trigger(sender)
 	}

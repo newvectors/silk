@@ -2,9 +2,26 @@ CAIRO_CFLAGS := $(shell pkg-config --cflags cairo 2>/dev/null)
 CAIRO_LDFLAGS := $(shell pkg-config --libs cairo 2>/dev/null)
 CGO_FLAGS := CGO_CFLAGS="$(CAIRO_CFLAGS)" CGO_LDFLAGS="$(CAIRO_LDFLAGS)"
 
-.PHONY: all designer demo clean test install-deps example-calculator example-todo gen-resources run
+.PHONY: all designer demo clean test install-deps example-calculator example-todo gen-resources run ide run-ide test-ide silkgen test-platform-scripts
 
-all: gen-resources designer demo
+all: gen-resources ide silkgen designer demo
+
+ide:
+	@mkdir -p bin
+	$(CGO_FLAGS) go build -o bin/silkide ./cmd/silkide
+
+silkgen:
+	@mkdir -p bin
+	$(CGO_FLAGS) go build -o bin/silkgen ./cmd/silkgen
+
+run-ide: ide
+	./bin/silkide
+
+test-ide:
+	$(CGO_FLAGS) go test ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
+
+test-platform-scripts:
+	bash scripts/test-platform-scripts.sh
 
 designer:
 	@mkdir -p bin
@@ -39,10 +56,9 @@ install-deps:
 		brew install cairo pkg-config; \
 	fi
 	@if [ "$$(uname)" = "Linux" ]; then \
-		echo "Installing Cairo via apt..."; \
-		sudo apt-get install -y libcairo2-dev pkg-config; \
+		bash scripts/install-linux-deps.sh; \
 	fi
-	go mod tidy
+	go mod download
 	@echo "=== Done ==="
 
 gen-resources:
@@ -62,9 +78,14 @@ help:
 	@echo "  make run                Build and run the designer"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make all                Build everything (designer + demo + resources)"
+	@echo "  make all                Build IDE, generator, designer, demo and resources"
 	@echo "  make designer           Build the visual designer"
 	@echo "  make demo               Build the widget demo"
+	@echo "  make ide                Build the integrated Go designer / IDE"
+	@echo "  make silkgen            Build the Go form generator"
+	@echo "  make run-ide            Build and run the IDE"
+	@echo "  make test-ide           Run IDE, designer and UI regression tests"
+	@echo "  make test-platform-scripts Check dependency and release-packaging scripts"
 	@echo "  make gen-resources      Generate icon/theme PNG resources"
 	@echo "  make example-calculator Build the calculator example"
 	@echo "  make example-todo       Build the todo app example"

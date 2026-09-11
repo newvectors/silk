@@ -131,9 +131,9 @@ func TestFakeWidgetSaveLoadDesignProperties(t *testing.T) {
 	assertRestored(t, fw3)
 }
 
-// TestScalarRoundTripKinds covers scalarToString / parseScalar across every
+// TestScalarRoundTripKinds covers capture and the real restoration entry across every
 // scalar kind — including the integer/unsigned paths that Tank does not
-// exercise — plus paint.Color, and confirms other non-scalar types are
+// exercise — plus paint.Color and []string, and confirms unsupported types are
 // rejected.
 func TestScalarRoundTripKinds(t *testing.T) {
 	cases := []interface{}{
@@ -147,6 +147,8 @@ func TestScalarRoundTripKinds(t *testing.T) {
 		paint.Color{R: 1, G: 2, B: 3, A: 255}, // opaque: serialized "#010203"
 		paint.Color{R: 4, G: 5, B: 6, A: 128}, // alpha kept: "#04050680"
 		paint.Color{R: 0, G: 0, B: 0, A: 0},   // zero color must not read back as opaque black
+		[]string{"", "quote \" and line\nbreak", "中文", "@ref:literal"},
+		[]string{},
 	}
 	for _, want := range cases {
 		s, ok := scalarToString(reflect.ValueOf(want))
@@ -154,12 +156,12 @@ func TestScalarRoundTripKinds(t *testing.T) {
 			t.Errorf("scalarToString(%v) reported unsupported", want)
 			continue
 		}
-		got, ok := parseScalar(s, reflect.TypeOf(want))
+		got, ok := restoreTestProperty(s, reflect.TypeOf(want))
 		if !ok {
-			t.Errorf("parseScalar(%q, %T) reported unsupported", s, want)
+			t.Errorf("property restore(%q, %T) reported unsupported", s, want)
 			continue
 		}
-		if got.Interface() != want {
+		if !reflect.DeepEqual(got.Interface(), want) {
 			t.Errorf("round-trip %T: got %v, want %v (serialized %q)", want, got.Interface(), want, s)
 		}
 	}
@@ -168,16 +170,33 @@ func TestScalarRoundTripKinds(t *testing.T) {
 	if _, ok := scalarToString(reflect.ValueOf(complexT{1, 2})); ok {
 		t.Error("scalarToString must reject non-scalar struct types")
 	}
-	if _, ok := parseScalar("whatever", reflect.TypeOf(complexT{})); ok {
-		t.Error("parseScalar must reject non-scalar target types")
+	if _, ok := restoreTestProperty("whatever", reflect.TypeOf(complexT{})); ok {
+		t.Error("property restore must reject unsupported target types")
 	}
 
 	// paint.ParseColor answers opaque black for anything it does not
 	// recognise, so a color that is absent or truncated in the design file
 	// has to be refused rather than repainting the widget black.
-	for _, bad := range []string{"", "#", "#0102", "010203", "#0102030405"} {
-		if _, ok := parseScalar(bad, colorType); ok {
-			t.Errorf("parseScalar(%q, paint.Color) accepted a malformed color", bad)
+	for _, bad := range []string{"", "#", "#0102", "010203", "#0102030405", "#ZZ0102"} {
+		if _, ok := restoreTestProperty(bad, colorType); ok {
+			t.Errorf("property restore(%q, paint.Color) accepted a malformed color", bad)
 		}
 	}
+}
+
+// Exercise the property-sheet route rather than a second test-only decoder.
+// The setter records whether malformed data was actually applied.
+type testPropertySetter struct{ set interface{} }
+
+func (p testPropertySetter) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("value", nil, p.set)
+}
+
+func restoreTestProperty(raw string, typ reflect.Type) (value reflect.Value, called bool) {
+	setter := reflect.MakeFunc(reflect.FuncOf([]reflect.Type{typ}, nil, false), func(args []reflect.Value) []reflect.Value {
+		value, called = args[0], true
+		return nil
+	})
+	applyWidgetProperties(testPropertySetter{setter.Interface()}, map[string]string{"value": raw})
+	return value, called
 }

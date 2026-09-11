@@ -42,15 +42,12 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Install Cairo (Linux)
+      - name: Install Linux build and desktop dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config libcairo2-dev \
-            libx11-dev libxcursor-dev libxi-dev \
-            libxinerama-dev libxrandr-dev libxxf86vm-dev \
-            libgl1-mesa-dev
+          bash scripts/install-linux-deps.sh
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils
+          echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
 
       - name: Install Cairo (macOS)
         if: runner.os == 'macOS'
@@ -84,7 +81,8 @@ jobs:
           # can resolve cairo. setup-go's GOROOT/PATH ordering puts
           # the Microsoft runtime in front of ucrt64; clobber that
           # so cgo picks up the gcc we just installed.
-          echo "PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
+          ROOT="$(cygpath -m /ucrt64)"
+          echo "PKG_CONFIG_PATH=$ROOT/lib/pkgconfig" >> $GITHUB_ENV
           echo "CC=gcc" >> $GITHUB_ENV
           echo "CXX=g++" >> $GITHUB_ENV
           # Derive the Windows path instead of hardcoding C:\msys64:
@@ -94,18 +92,27 @@ jobs:
           echo "$(cygpath -w /ucrt64/bin)" >> $GITHUB_PATH
 
       - name: Vet
-        run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+        # Existing cross-package geometry/color literals are intentionally
+        # unkeyed; keep all other analyzers enabled, matching local QA.
+        run: go vet -composites=false ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+
+      - name: Test platform packaging scripts
+        run: bash scripts/test-platform-scripts.sh
+
+      - name: Test SDK without a display (Linux)
+        if: runner.os == 'Linux'
+        run: env -u DISPLAY -u WAYLAND_DISPLAY go test -short -count=1 ./core/ ./decl/ ./prop/ ./cmd/silkgen/ ./internal/silkgen/
 
       # Split into groups: building every cgo test binary in one invocation can
       # exhaust the runner (cairo + sqlite amalgamation compile at once).
       - name: Test (core UI)
-        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/
 
       - name: Test (SCADA backend)
-        run: go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
 
       - name: Test (IDE engines)
-        run: go test -short -count=1 ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
       - name: Build legacy entry points
         if: runner.os != 'Windows'
@@ -121,6 +128,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: go build -v -o silkide.exe ./cmd/silkide/
+
+      - name: Smoke silkide (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: bash scripts/linux-run-smoke.sh /tmp/silkide
 
       - name: Build silkgen
         run: go build -v ./cmd/silkgen/

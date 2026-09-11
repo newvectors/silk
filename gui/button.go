@@ -95,7 +95,7 @@ func (this *Button) OnMouseLeave() {
 
 func (this *Button) OnLeftDown(x, y float64) {
 	//core.Debug("(this *Button) OnLeftDown()")
-	if this.IsEnabled() {
+	if this.IsEnabled() && this.IsAllAncentorsVisible() {
 		this.pushed = true
 		this.SetFocus()
 		this.Self().Update()
@@ -106,6 +106,10 @@ func (this *Button) OnLeftUp(x, y float64) {
 	//core.Debug("(this *Button) OnLeftUp()")
 	pushed := this.pushed
 	this.pushed = false
+	if core.IsDebugOn() {
+		core.Debug("button release: pushed=", pushed, ", hover=", this.IsHover(),
+			", enabled=", this.IsEnabled(), ", visible=", this.IsAllAncentorsVisible())
+	}
 	this.Self().Update()
 	this.PopCapture()
 	if this.action != nil && pushed && this.IsHover() && this.IsEnabled() {
@@ -114,11 +118,19 @@ func (this *Button) OnLeftUp(x, y float64) {
 }
 
 func (this *Button) emit() {
+	if !this.IsEnabled() || !this.IsAllAncentorsVisible() {
+		return
+	}
+	action := this.action
 	if this.subPopup != nil {
+		_, menuHeader := this.subPopup.(*Menu)
 		if this.subPopup.IsVisible() {
 			this.HideSubPopup()
 		} else {
 			this.ShowSubPopup()
+		}
+		if menuHeader {
+			return // A submenu header opens its menu, it is not a leaf command.
 		}
 	}
 	if this.subPopup == nil && this.IsInPopupMenu() {
@@ -127,7 +139,11 @@ func (this *Button) emit() {
 			root.Hide()
 		}
 	}
-	this.action.Trigger(this.Self())
+	// Hide callbacks can disable or remove the action. Re-check availability,
+	// but not visibility after our own root.Hide; retain the clicked command.
+	if this.IsEnabled() && action.IsEnabled() {
+		action.Trigger(this.Self())
+	}
 }
 
 // Compile-time check: Button must satisfy IEventKeyDown so the window routes
@@ -140,15 +156,40 @@ var _ IEventKeyDown = (*Button)(nil)
 // Action.Trigger / sub-popup toggle). Implementing this interface also opts
 // the button into the Tab focus chain (see focus.go AutoFocus). Guarded on
 // IsEnabled — which for a Button also implies a non-nil action — so a disabled
-// button ignores keys and emit() never dereferences a nil action.
+// button never activates. Escape still reaches its popup/dialog if focus was
+// left on a button that became disabled.
 func (this *Button) OnKeyDown(key int, repeat bool) {
+	if !this.IsAllAncentorsVisible() {
+		return
+	}
+	if key == KeyEsc && !repeat {
+		for p := this.Parent(); p != nil; p = p.Parent() {
+			if menu, ok := p.(IMenu); ok && p.IsPopup() {
+				if handler, ok := menu.(IEventKeyDown); ok {
+					handler.OnKeyDown(key, false)
+				}
+				return // Esc closes the popup, never its owning dialog too.
+			}
+			if dialog, ok := p.(interface{ resolveCancel() }); ok {
+				dialog.resolveCancel()
+				return
+			}
+		}
+	}
 	if !this.IsEnabled() {
 		return
 	}
 	switch key {
 	case KeyEnter, KeySpace:
-		this.emit()
+		if !repeat {
+			this.emit()
+		}
 	}
+}
+
+func (this *Button) OnHide() {
+	this.pushed = false
+	this.HideSubPopup()
 }
 
 func (this *Button) OnMouseStop(x, y float64) {
@@ -269,8 +310,13 @@ func (this *Button) invalidateHints() {
 }
 
 func (this *Button) SetSubPopup(iw IWidget) {
+	if this.subPopup != nil && this.subPopup != iw {
+		this.HideSubPopup()
+	}
 	this.subPopup = iw
-	this.subPopup.SetVisible(false)
+	if iw != nil {
+		iw.SetVisible(false)
+	}
 }
 
 func (this *Button) SubPopup() IWidget {
@@ -278,7 +324,7 @@ func (this *Button) SubPopup() IWidget {
 }
 
 func (this *Button) ShowSubPopup() {
-	if this.subPopup == nil || this.IsSubPopupVisible() {
+	if !this.IsEnabled() || !this.IsAllAncentorsVisible() || this.subPopup == nil || this.IsSubPopupVisible() {
 		return
 	}
 
@@ -290,9 +336,15 @@ func (this *Button) ShowSubPopup() {
 	if this.cbSubPopup != nil {
 		this.cbSubPopup(this.self.(IButton))
 	}
+	if !this.IsEnabled() || !this.IsAllAncentorsVisible() || this.subPopup == nil {
+		return
+	}
 
 	this.subPopup.SetParent(this)
 	this.subPopup.AttachWindow(WtPopup)
+	if this.subPopup.Window() == nil {
+		return
+	}
 
 	hints := this.subPopup.SizeHints()
 	this.subPopup.SetSize(0, 0)
@@ -309,6 +361,10 @@ func (this *Button) ShowSubPopup() {
 	LayoutPopup(this.subPopup, x, y, w, h, popupVertical, overlap)
 	this.subPopup.Show()
 	this.subPopup.PushCapture()
+	if menu, ok := this.subPopup.(*Menu); ok {
+		menu.setHighlight(-1)
+		menu.SetFocus()
+	}
 	this.Self().Update()
 
 }

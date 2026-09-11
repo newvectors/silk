@@ -31,6 +31,11 @@ func ThemeRev() uint64 { return themeRev }
 // SetThemeMode switches between light and dark themes.
 func SetThemeMode(mode ThemeMode) {
 	currentThemeMode = mode
+	if mode == ThemeDark {
+		paint.SetIconPalette(paint.DarkIconPalette())
+	} else {
+		paint.SetIconPalette(paint.LightIconPalette())
+	}
 	defaultThemeSingleton = nil // Force re-creation
 	// The snapshot describes the instance being discarded, so it must go with
 	// it: holding on to it made ResetStyleSheet restore the previous mode's
@@ -536,11 +541,11 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 		radius := 4.0
 
 		if !btn.IsEnabled() {
-			// Disabled state: light gray fill
+			// Disabled state follows the active theme, not a hard-coded light face.
 			roundedRect(g, 0, 0, w, h, radius)
-			g.SetBrush1(paint.Color{243, 244, 246, 200})
+			g.SetBrush1(t.FormLightColor)
 			g.FillPreserve()
-			g.SetPen1(paint.Color{209, 213, 219, 200}, 1)
+			g.SetPen1(t.BorderColor, 1)
 			g.Stroke()
 		} else if btn.IsSubPopupVisible() || btn.IsChecked() || (btn.IsPushed() && btn.IsHover()) {
 			// Pressed / checked: darker blue

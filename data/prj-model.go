@@ -109,7 +109,6 @@ func (m *PrjModel) Data(idx gui.ModelIndex, role gui.ItemDataRole) interface{} {
 	default:
 		return nil
 	}
-	return nil
 }
 
 func (m *PrjModel) HeaderData(section int, vertical bool, role gui.ItemDataRole) interface{} {
@@ -127,7 +126,6 @@ func (m *PrjModel) HeaderData(section int, vertical bool, role gui.ItemDataRole)
 	default:
 		return nil
 	}
-	return nil
 }
 
 // 获取父节点的索引

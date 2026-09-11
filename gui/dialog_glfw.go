@@ -5,76 +5,80 @@ package gui
 import (
 	"bytes"
 	"os/exec"
-	"runtime"
 	"strings"
-	"time"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/uk0/silk/core"
 )
 
 // OpenFileDialog opens a native file dialog and returns the selected file path
 func OpenFileDialog() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return macOpenFileDialog()
-	default:
-		return linuxOpenFileDialog()
-	}
+	return platformOpenFileDialog()
 }
 
 // SaveFileDialog opens a native save dialog and returns the selected file path
 func SaveFileDialog() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return macSaveFileDialog()
-	default:
-		return linuxSaveFileDialog()
-	}
+	return platformSaveFileDialog()
 }
 
-// runDialogCmd runs an external command (e.g. osascript, zenity) without
-// blocking the GLFW event loop. It posts empty events at ~60fps so the
-// window system stays responsive while the modal dialog is open.
-func runDialogCmd(name string, args ...string) string {
-	cmd := exec.Command(name, args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Start(); err != nil {
-		return ""
-	}
-
-	done := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(done)
-	}()
-
-	for {
-		select {
-		case <-done:
-			return strings.TrimSpace(stdout.String())
-		default:
-			glfw.PostEmptyEvent()
-			time.Sleep(16 * time.Millisecond)
+// nativeDialogFrame pumps events and queued work while an external chooser
+// owns input. Posting empty events without consuming them stalled the window.
+var nativeDialogFrame = func() {
+	glfw.WaitEventsTimeout(1.0 / 60.0)
+	serviceUIFrame()
+	for _, win := range winMap {
+		if win != nil && win.dirty && win.IsVisible() {
+			win.paint()
 		}
 	}
 }
 
-func macOpenFileDialog() string {
-	// Restrict selection to SilkUI design files (extension-based),
-	// while still accepting legacy .cml / .silk / .form files.
-	script := `set theFile to POSIX path of (choose file with prompt "Open SilkUI File" of type {"silkui", "cml", "silk", "form"})
-return theFile`
-	return runDialogCmd("osascript", "-e", script)
-}
+func runDialogCmd(name string, args ...string) string {
+	cmd := exec.Command(name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		core.Warn("file dialog: ", err)
+		return ""
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 
-func macSaveFileDialog() string {
-	// osascript's "choose file name" does not take a file type filter,
-	// but we can seed the default filename with a .silkui extension so
-	// users get the right suffix by default.
-	script := `set theFile to POSIX path of (choose file name with prompt "Save SilkUI File" default name "design.silkui")
-return theFile`
-	return runDialogCmd("osascript", "-e", script)
+	// Modal semantics: keep repainting, but don't let a second shortcut open
+	// another chooser or mutate the document being saved underneath this one.
+	enabled := make(map[*Window]bool)
+	for _, win := range winMap {
+		if win != nil {
+			enabled[win] = win.IsEnabled()
+			win.SetEnabled(false)
+		}
+	}
+	defer func() {
+		for win, wasEnabled := range enabled {
+			win.SetEnabled(wasEnabled)
+		}
+	}()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				// AppleScript uses -128 for an ordinary user cancellation.
+				if message := strings.TrimSpace(stderr.String()); message != "" && !strings.Contains(message, "(-128)") {
+					core.Warn("file dialog: ", message)
+				}
+				return ""
+			}
+			return strings.TrimSpace(stdout.String())
+		default:
+			if shouldQuit {
+				_ = cmd.Process.Kill()
+				<-done
+				return ""
+			}
+			nativeDialogFrame()
+		}
+	}
 }
 
 func linuxOpenFileDialog() string {

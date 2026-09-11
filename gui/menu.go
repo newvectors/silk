@@ -85,7 +85,8 @@ func sepCount(objCount int) int {
 }
 
 func (this *Menu) layoutVertical() {
-	count := len(this.items)
+	items := this.visibleItems()
+	count := len(items)
 	//if count == 0 {
 	//	return
 	//}
@@ -106,7 +107,7 @@ func (this *Menu) layoutVertical() {
 	var total float64
 	var expandBase, shrinkBase float64
 
-	for i, c := range this.items {
+	for i, c := range items {
 
 		hi := c.SizeHints()
 		hints[i] = hi
@@ -123,11 +124,11 @@ func (this *Menu) layoutVertical() {
 			hints[i].Width = w
 		}
 	}
-	extra := w - total - float64(sepCount(n))*spacing
+	extra := h - total - float64(sepCount(n))*spacing
 	if extra > 0 && expandBase > 0 {
 		dh := extra / expandBase
 		y1 := y
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var h1 float64
 			if (hi.Policy & ExpandVertical) != 0 {
@@ -141,7 +142,7 @@ func (this *Menu) layoutVertical() {
 	} else if extra < 0 && shrinkBase > 0 {
 		dh := extra / shrinkBase
 		y1 := y
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var h1 float64
 			if (hi.Policy & ShrinkVertical) != 0 {
@@ -154,7 +155,7 @@ func (this *Menu) layoutVertical() {
 		}
 	} else {
 		y1 := y
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var h1 float64 = hi.Height
 			c.SetBounds(x, y1, hi.Width, h1)
@@ -165,7 +166,8 @@ func (this *Menu) layoutVertical() {
 }
 
 func (this *Menu) layoutHorizontal() {
-	count := len(this.items)
+	items := this.visibleItems()
+	count := len(items)
 	//if count == 0 {
 	//	return
 	//}
@@ -186,7 +188,7 @@ func (this *Menu) layoutHorizontal() {
 	var total float64
 	var expandBase, shrinkBase float64
 
-	for i, c := range this.items {
+	for i, c := range items {
 		hi := c.SizeHints()
 		hints[i] = hi
 		total += hi.Width
@@ -206,7 +208,7 @@ func (this *Menu) layoutHorizontal() {
 	if extra > 0 && expandBase > 0 {
 		dw := extra / expandBase
 		x1 := x
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var w1 float64
 			if (hi.Policy & ExpandHorizontal) != 0 {
@@ -220,7 +222,7 @@ func (this *Menu) layoutHorizontal() {
 	} else if extra < 0 && shrinkBase > 0 {
 		dw := extra / shrinkBase
 		x1 := x
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var w1 float64
 			if (hi.Policy & ShrinkHorizontal) != 0 {
@@ -233,7 +235,7 @@ func (this *Menu) layoutHorizontal() {
 		}
 	} else {
 		x1 := x
-		for i, c := range this.items {
+		for i, c := range items {
 			hi := hints[i]
 			var w1 float64 = hi.Width
 			c.SetBounds(x1, y, w1, hi.Height)
@@ -252,12 +254,13 @@ func (this *Menu) Layout() {
 
 func (this *Menu) SizeHints() SizeHints {
 	t := Theme()
+	items := this.visibleItems()
 
 	if this.IsPopup() {
 		//ml, mr, mt, mb := t.MenuMargin.Margin()
 		m := t.MenuMargin
 		var w, h float64
-		for _, c := range this.items {
+		for _, c := range items {
 			hints := c.SizeHints()
 			w = math.Max(w, hints.Width)
 			h += hints.Height
@@ -270,14 +273,14 @@ func (this *Menu) SizeHints() SizeHints {
 		var w, h float64
 		if this.IsVertical() {
 			//h += float64(sep) * t.Spacing
-			for _, c := range this.items {
+			for _, c := range items {
 				hints := c.SizeHints()
 				w = math.Max(w, hints.Width)
 				h += hints.Height
 			}
 		} else {
 			//w += float64(sep) * t.Spacing
-			for _, c := range this.items {
+			for _, c := range items {
 				hints := c.SizeHints()
 				w += hints.Width
 				h = math.Max(h, hints.Height)
@@ -290,12 +293,23 @@ func (this *Menu) SizeHints() SizeHints {
 
 }
 
+func (this *Menu) visibleItems() []IWidget {
+	items := make([]IWidget, 0, len(this.items))
+	for _, item := range this.items {
+		if item.IsVisible() {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 func (this *Menu) AddWidget(iw IWidget) {
 	iw.SetParent(this)
 	this.items = append(this.items, iw)
 }
 
 func (this *Menu) RemoveWidget(iw IWidget) {
+	this.setHighlight(-1)
 	iw.SetParent(nil)
 	for i, v := range this.items {
 		if v == iw {
@@ -311,6 +325,8 @@ func (this *Menu) RemoveWidget(iw IWidget) {
 }
 
 func (this *Menu) Clear() {
+	this.setHighlight(-1)
+	this.HideAllSubs()
 	for _, iw := range this.Items() {
 		iw.Detach()
 	}
@@ -358,6 +374,7 @@ func (this *Menu) OnShow() {
 }
 
 func (this *Menu) OnHide() {
+	this.setHighlight(-1)
 	this.HideAllSubs()
 	if this.parent != nil {
 		this.parent.Self().Update()
@@ -509,10 +526,12 @@ func (this *Menu) OnIdle() {
 // 在全局坐标(xg, yg)显示为弹出菜单
 // 注: 无论菜单的Parent()是否为nil, 都是全局坐标
 func (this *Menu) ShowAsPopup(xg, yg float64, autoClose bool) {
+	this.Hide() // Never show a new native window before its final geometry.
 	this.AttachWindow(WtPopup)
-	if autoClose {
-		this.Window().SetCloseOnHide(true)
+	if this.Window() == nil {
+		return
 	}
+	this.Window().SetCloseOnHide(autoClose)
 	hints := this.SizeHints()
 	this.SetSize(0, 0)
 	this.SetSize(hints.Width, hints.Height)
@@ -575,7 +594,7 @@ func (this *Menu) itemKinds() []menuItemKind {
 	kinds := make([]menuItemKind, len(this.items))
 	for i, c := range this.items {
 		if _, ok := c.(IButton); ok {
-			kinds[i].selectable = c.IsEnabled()
+			kinds[i].selectable = c.IsVisible() && c.IsEnabled()
 		}
 	}
 	return kinds
@@ -594,9 +613,12 @@ func (this *Menu) highlightedButton() *Button {
 // 把高亮项设为全局悬停项即可让 DrawButton 渲染出与鼠标悬停一致的外观
 // (高亮背景 + 反白文字), 无需改动 theme. idx 为 -1 时清除高亮.
 func (this *Menu) setHighlight(idx int) {
+	old := this.highlightedButton()
 	this.highlight = idx
 	if b := this.highlightedButton(); b != nil {
 		setMouseHoverWidget(b.Self())
+	} else if old != nil && mouseHoverWidget == old.Self() {
+		setMouseHoverWidget(nil)
 	}
 	this.Update()
 }
@@ -611,7 +633,7 @@ func (this *Menu) setHighlight(idx int) {
 //
 // 仅弹出菜单处理按键; 菜单栏(非 popup)不参与键盘导航.
 func (this *Menu) OnKeyDown(key int, repeat bool) {
-	if !this.IsPopup() {
+	if !this.IsPopup() || !this.IsAllAncentorsVisible() || !this.IsEnabled() {
 		return
 	}
 	kinds := this.itemKinds()
@@ -633,7 +655,7 @@ func (this *Menu) OnKeyDown(key int, repeat bool) {
 			this.setHighlight(idx)
 		}
 	case KeyEnter, KeySpace:
-		if b := this.highlightedButton(); b != nil && b.IsEnabled() {
+		if b := this.highlightedButton(); !repeat && b != nil && b.IsVisible() && b.IsEnabled() {
 			// 与点击一致: 切换/关闭弹出链并触发 Action.
 			b.emit()
 		}
@@ -644,9 +666,9 @@ func (this *Menu) OnKeyDown(key int, repeat bool) {
 			this.Hide()
 		}
 	case KeyRight:
-		if b := this.highlightedButton(); b != nil && b.IsEnabled() && b.SubPopup() != nil {
+		if b := this.highlightedButton(); b != nil && b.IsVisible() && b.IsEnabled() && b.SubPopup() != nil {
 			b.ShowSubPopup()
-			if sub, ok := b.SubPopup().(*Menu); ok {
+			if sub, ok := b.SubPopup().(*Menu); ok && sub.IsVisible() && sub.Window() != nil {
 				sub.SetFocus()
 				if idx := nextSelectableIndex(sub.itemKinds(), -1, +1, false); idx >= 0 {
 					sub.setHighlight(idx)

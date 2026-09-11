@@ -69,7 +69,9 @@ func (this *TDocIni) load() {
 	if err != nil {
 		Trace(`failed to load ini file: "` + this.fname + `"`)
 		this.doc = NewTDoc()
-		this.doc.SaveFile(this.fname)
+		// Loading defaults (including missing read-only defaults) must not
+		// create files in the application's installation directory. Persist
+		// only after a write and Sync, using the configured writable target.
 	} else {
 		Trace(`ini file loaded: "` + this.fname + `"`)
 	}
@@ -170,7 +172,13 @@ func UserIni() *TDocIni {
 		if err == nil {
 			userIni = LoadTDocIni(fname, false)
 		} else {
-			userIni = LoadTDocIni(ResourceDir()+"/default/ini.cml", false)
+			// Read legacy settings without modifying the old installation.
+			// Subsequent writes always go to the new per-user data directory.
+			defaults := ExeFileDir() + "/local/ini.cml"
+			if _, err := os.Stat(defaults); err != nil {
+				defaults = ResourceDir() + "/default/ini.cml"
+			}
+			userIni = LoadTDocIni(defaults, false)
 			userIni.load()
 			userIni.mtime = time.Now()
 			userIni.fname = fname

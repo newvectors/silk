@@ -132,8 +132,21 @@ func (this *UndoStack) Push(cmd ICommand) {
 	if cmd == nil {
 		return
 	}
-	// try merge
-	if this.current > 0 && this.clean != this.current {
+	// Pushing after Undo creates a new branch. A saved state on the discarded
+	// redo branch is no longer reachable, even if the new branch later has the
+	// same numeric index. Keep clean points at/before the branch point intact.
+	branched := this.current < len(this.cmds)
+	if branched {
+		if this.clean > this.current {
+			this.clean = -1
+		}
+		clear(this.cmds[this.current:])
+		this.cmds = this.cmds[:this.current]
+	}
+	// Merge only consecutive edits at the history tip. Undo is an explicit
+	// grouping boundary: merging across it can mutate a retained command and
+	// previously even left the discarded redo commands available to execute.
+	if !branched && this.current > 0 && this.clean != this.current {
 		prev := this.cmds[this.current-1]
 		if im, ok := prev.(interface {
 			MergeWidth(ICommand) bool

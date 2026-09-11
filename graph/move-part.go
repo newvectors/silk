@@ -25,7 +25,11 @@ func (this *MovePart) OnLeftDragStart(x, y float64) {
 
 	this.item = scene.FindItemAt(downX, downY, this.cond)
 
-	if this.item == nil {
+	// The scene is the document surface, not a movable child. In designers
+	// it remains selectable for form properties and resize handles, but a drag
+	// on its empty body must fall through to MarqueePart (next in ArrowTool).
+	if this.item == nil || this.item == scene {
+		this.item = nil
 		return
 	}
 

@@ -182,3 +182,20 @@ func checkGofmt(t *testing.T, src string) {
 		t.Fatalf("ToGo output not parseable:\n%s\nerr: %v", src, err)
 	}
 }
+
+func TestToGoLongNodesUseReadableAttributeLines(t *testing.T) {
+	n := Form(P("width", 378), P("height", 378), P("title", "Form"),
+		Child(Button(P("x", 94), P("y", 57), P("width", 132), P("height", 38))))
+	got := ToGo(n)
+	for _, line := range strings.Split(got, "\n") {
+		if len(line) > 100 {
+			t.Fatalf("generated property list collapsed into a long line:\n%s", got)
+		}
+	}
+	if !strings.Contains(got, "decl.Form(\n") || !strings.Contains(got, "decl.Button(\n") {
+		t.Fatalf("missing multi-line widget boundaries:\n%s", got)
+	}
+	if _, err := parser.ParseExpr(got); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -291,7 +291,6 @@ func appendPersistVal(buf []byte, val interface{}) ([]byte, error) {
 		}
 		return append(buf, '#', '#', '#'), errors.New("unsupported type: " + v.Type().String())
 	}
-	panic("internal error")
 }
 
 func VisualString(val interface{}) string {

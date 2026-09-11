@@ -77,6 +77,9 @@ type Cursor struct {
 }
 
 func loadSystemCursor(shape glfw.StandardCursor) *Cursor {
+	if !glfwReady {
+		return &Cursor{}
+	}
 	c := glfw.CreateStandardCursor(shape)
 	if c == nil {
 		return &Cursor{}
@@ -126,6 +129,9 @@ func NewCursorFromIcon(icon paint.Icon, sz, hotX, hotY int) (*Cursor, error) {
 
 // NewCursorFromData creates a cursor from cursor data
 func NewCursorFromData(data CursorData) (*Cursor, error) {
+	if err := nativeDesktopError("NewCursorFromData"); err != nil {
+		return nil, err
+	}
 	if data.Pixmap == nil {
 		return nil, core.StrErr("nil pixmap")
 	}

@@ -4,6 +4,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
 	"math"
+	"strings"
 )
 
 func init() {
@@ -97,6 +98,7 @@ func (this *ToolBar) IconSize() int {
 }
 
 func (this *ToolBar) SetIconSize(size int) {
+	size = max(1, min(size, 256))
 	if this.iconSize == size {
 		return
 	}
@@ -112,6 +114,9 @@ func (this *ToolBar) Spacing() float64 {
 }
 
 func (this *ToolBar) SetSpacing(s float64) {
+	if math.IsNaN(s) || math.IsInf(s, 0) || s < 0 {
+		s = 0
+	}
 	if this.spacing == s {
 		return
 	}
@@ -150,73 +155,68 @@ func (this *ToolBar) Layout() {
 	}
 }
 
+// itemSizeHints is the single measurement used by placement and the bar's
+// preferred size. A button's action text can be deliberately hidden; measuring
+// it anyway both wastes horizontal space and under-reports text-only heights.
+func (this *ToolBar) itemSizeHints(item IWidget) SizeHints {
+	t := Theme()
+	m := t.ButtonMargin
+	icon := float64(this.iconSize)
+	if _, ok := item.(*Separator); ok {
+		if this.IsVertical() {
+			return SizeHints{Width: icon + m.L + m.R + 4, Height: t.SeparatorSize}
+		}
+		return SizeHints{Width: t.SeparatorSize + 6, Height: icon + m.T + m.B + 4}
+	}
+	if btn, ok := item.(*Button); ok {
+		hasIcon := btn.Icon() != nil && !btn.Icon().IsAir()
+		if !btn.IsTextVisible() {
+			return SizeHints{Width: icon + m.L + m.R + 4, Height: icon + m.T + m.B + 4}
+		}
+		text := t.Font.TextExtents(btn.Text())
+		textW := math.Max(text.Width, text.XAdvance)
+		textH := t.Font.FontExtents().Height
+		if hasIcon {
+			// Theme.DrawButton starts the label at 2*left margin + icon.
+			return SizeHints{Width: icon + textW + m.L*2 + m.R + 4,
+				Height: math.Max(icon, textH) + m.T + m.B + 4}
+		}
+		return SizeHints{Width: textW + m.L + m.R + 12, Height: textH + m.T + m.B + 6}
+	}
+	return item.SizeHints()
+}
+
+func toolbarDimension(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
+	}
+	return value
+}
+
 func (this *ToolBar) layoutHorizontal() {
 	t := Theme()
 	m := t.ButtonMargin
 	w, h := this.Self().Size()
-
-	// Measure every item before placing any: where the run has to be cut can
-	// only be known once the whole run is known.
-	type itemGeom struct {
-		y, w, h float64
-	}
+	w, h = toolbarDimension(w), toolbarDimension(h)
+	type itemGeom struct{ y, w, h float64 }
 	geom := make([]itemGeom, len(this.items))
 	for i, item := range this.items {
-		hints := item.SizeHints()
-		// separators get a small fixed width
+		hints := this.itemSizeHints(item)
+		iw, ih := toolbarDimension(hints.Width), toolbarDimension(hints.Height)
 		if _, ok := item.(*Separator); ok {
-			sz := t.SeparatorSize + 6
-			geom[i] = itemGeom{4, sz, h - 8}
+			inset := math.Min(4, h/2)
+			geom[i] = itemGeom{inset, iw, h - 2*inset}
 			continue
 		}
-		// buttons: size depends on whether they have an icon, text, or both
-		if btn, ok := item.(*Button); ok {
-			hasIcon := btn.Icon() != nil && !btn.Icon().IsAir()
-			text := btn.Text()
-
-			var btnW, btnH float64
-			if hasIcon && text == "" {
-				// Icon-only button (standard Qt Creator toolbar style)
-				btnW = float64(this.iconSize) + m.L + m.R + 4
-				btnH = float64(this.iconSize) + m.T + m.B + 4
-			} else if hasIcon && text != "" {
-				// Icon + text button
-				textW := t.Font.TextExtents(text).Width
-				btnW = float64(this.iconSize) + textW + m.L + m.R + 10
-				btnH = float64(this.iconSize) + m.T + m.B + 4
-			} else {
-				// Text-only button — size by text content
-				textW := t.Font.TextExtents(text).Width
-				fe := t.Font.FontExtents()
-				btnW = textW + m.L + m.R + 12
-				btnH = fe.Height + m.T + m.B + 6
-			}
-			y := (h - btnH) * 0.5
-			if y < 0 {
-				y = 0
-			}
-			geom[i] = itemGeom{y, btnW, btnH}
-			continue
-		}
-		// custom widgets use their SizeHints
-		iw := hints.Width
-		ih := hints.Height
-		if (hints.Policy & (GrowVertical | ExpandVertical)) != 0 {
+		if _, button := item.(*Button); !button && hints.Policy&(GrowVertical|ExpandVertical) != 0 {
 			ih = h
 		}
-		y := (h - ih) * 0.5
-		if y < 0 {
-			y = 0
-		}
-		geom[i] = itemGeom{y, iw, ih}
+		ih = math.Min(ih, h)
+		geom[i] = itemGeom{(h - ih) / 2, iw, ih}
 	}
 
-	// The chevron takes an icon-only button's width; reserving it (plus the
-	// spacing before it) is what keeps the last placed item from ending up
-	// underneath it.
 	ovW := float64(this.iconSize) + m.L + m.R + 4
-	avail := w - m.R
-
+	avail := math.Max(0, w-m.R)
 	total := m.L
 	for i, g := range geom {
 		if i > 0 {
@@ -224,9 +224,8 @@ func (this *ToolBar) layoutHorizontal() {
 		}
 		total += g.w
 	}
-
 	shown := len(geom)
-	if total > avail {
+	if total > avail+1e-9 {
 		limit := avail - ovW - this.spacing
 		x := m.L
 		shown = 0
@@ -234,19 +233,17 @@ func (this *ToolBar) layoutHorizontal() {
 			if i > 0 {
 				x += this.spacing
 			}
-			if x+g.w > limit {
+			if x+g.w > limit+1e-9 {
 				break
 			}
 			x += g.w
 			shown = i + 1
 		}
 	}
-
 	this.overflow = nil
 	x := m.L
 	for i, item := range this.items {
 		if i >= shown {
-			// Off the end of the bar: reachable through the chevron menu only.
 			item.SetVisible(false)
 			this.overflow = append(this.overflow, item)
 			continue
@@ -255,7 +252,6 @@ func (this *ToolBar) layoutHorizontal() {
 		item.SetBounds(x, geom[i].y, geom[i].w, geom[i].h)
 		x += geom[i].w + this.spacing
 	}
-
 	if len(this.overflow) == 0 {
 		if this.overflowBtn != nil {
 			this.overflowBtn.SetVisible(false)
@@ -263,13 +259,10 @@ func (this *ToolBar) layoutHorizontal() {
 		return
 	}
 	btn := this.overflowButton()
-	btnH := float64(this.iconSize) + m.T + m.B + 4
-	y := (h - btnH) * 0.5
-	if y < 0 {
-		y = 0
-	}
+	btnW := math.Min(ovW, w)
+	btnH := math.Min(float64(this.iconSize)+m.T+m.B+4, h)
 	btn.SetVisible(true)
-	btn.SetBounds(avail-ovW, y, ovW, btnH)
+	btn.SetBounds(math.Max(0, avail-btnW), (h-btnH)/2, btnW, btnH)
 }
 
 // OverflowItems returns the items the last horizontal layout could not fit,
@@ -285,6 +278,7 @@ func (this *ToolBar) overflowButton() *Button {
 	if this.overflowBtn == nil {
 		btn := NewButton1("»", nil)
 		btn.SetParent(this)
+		SetToolTip(btn, "更多工具")
 		btn.Action().BindFunc0(func() {
 			this.showOverflow()
 		})
@@ -306,13 +300,13 @@ var showToolBarPopup = func(menu *Menu, xg, yg float64) {
 // does the same thing whether the window was wide enough for it or not.
 func (this *ToolBar) showOverflow() {
 	menu := NewPopupMenu()
+	menu.SetParent(this)
 	for _, item := range this.overflow {
 		switch v := item.(type) {
 		case *Button:
-			src := v
-			menu.AddButton1(src.Text(), src.Icon()).Action().BindFunc0(func() {
-				src.Action().Trigger(src)
-			})
+			if v.Action() != nil {
+				menu.AddActionButton(&toolBarOverflowAction{IAction: v.Action(), source: v})
+			}
 		case *Separator:
 			menu.AddSeparator()
 		}
@@ -326,42 +320,74 @@ func (this *ToolBar) showOverflow() {
 	showToolBarPopup(menu, xg, yg+bh)
 }
 
-func (this *ToolBar) layoutVertical() {
-	t := Theme()
-	m := t.ButtonMargin
-	w, h := this.Self().Size()
-	_ = h
+// toolBarOverflowAction preserves dynamic checked/enabled state while giving
+// icon-only actions a readable menu name. Trigger checks the original button
+// again, since its availability can change while a popup is already open.
+type toolBarOverflowAction struct {
+	IAction
+	source *Button
+}
 
+func (a *toolBarOverflowAction) Text() string {
+	if text := strings.TrimSpace(a.source.Text()); text != "" {
+		return text
+	}
+	if tip := strings.TrimSpace(GetToolTip(a.source)); tip != "" {
+		return tip
+	}
+	if name := strings.TrimSpace(a.source.Action().ObjName()); name != "" {
+		return name
+	}
+	return "未命名操作"
+}
+func (a *toolBarOverflowAction) IsEnabled() bool { return a.source.IsEnabled() }
+func (a *toolBarOverflowAction) IsChecked() bool {
+	return a.source.Action() != nil && a.source.Action().IsChecked()
+}
+func (a *toolBarOverflowAction) Rev() uint64 {
+	var rev uint64
+	if a.source.Action() != nil {
+		rev = a.source.Action().Rev() << 2
+	}
+	if a.IsEnabled() {
+		rev |= 1
+	}
+	if a.IsChecked() {
+		rev |= 2
+	}
+	return rev
+}
+func (a *toolBarOverflowAction) Trigger(interface{}) {
+	if a.source.IsEnabled() {
+		a.source.Action().Trigger(a.source)
+	}
+}
+
+func (this *ToolBar) layoutVertical() {
+	m := Theme().ButtonMargin
+	w, _ := this.Self().Size()
+	w = toolbarDimension(w)
+	// Horizontal overflow is a previous orientation's state, not an explicit
+	// user hide. Restore it before placing the vertical run.
+	this.overflow = nil
+	if this.overflowBtn != nil {
+		this.overflowBtn.SetVisible(false)
+	}
 	y := m.T
 	for _, item := range this.items {
-		hints := item.SizeHints()
+		item.SetVisible(true)
+		hints := this.itemSizeHints(item)
+		iw, ih := toolbarDimension(hints.Width), toolbarDimension(hints.Height)
 		if _, ok := item.(*Separator); ok {
-			sz := t.SeparatorSize
-			item.SetBounds(0, y, w, sz)
-			y += sz + this.spacing
+			item.SetBounds(0, y, w, ih)
+			y += ih + this.spacing
 			continue
 		}
-		if _, ok := item.(*Button); ok {
-			btnW := float64(this.iconSize) + m.L + m.R
-			btnH := float64(this.iconSize) + m.T + m.B
-			x := (w - btnW) * 0.5
-			if x < 0 {
-				x = 0
-			}
-			item.SetBounds(x, y, btnW, btnH)
-			y += btnH + this.spacing
-			continue
-		}
-		iw := hints.Width
-		ih := hints.Height
-		if (hints.Policy & (GrowHorizontal | ExpandHorizontal)) != 0 {
+		if _, button := item.(*Button); !button && hints.Policy&(GrowHorizontal|ExpandHorizontal) != 0 {
 			iw = w
 		}
-		x := (w - iw) * 0.5
-		if x < 0 {
-			x = 0
-		}
-		item.SetBounds(x, y, iw, ih)
+		iw = math.Min(iw, w)
+		item.SetBounds((w-iw)/2, y, iw, ih)
 		y += ih + this.spacing
 	}
 }
@@ -386,50 +412,24 @@ func (this *ToolBar) Draw(g paint.Painter) {
 }
 
 func (this *ToolBar) SizeHints() SizeHints {
-	t := Theme()
-	m := t.ButtonMargin
-	if this.IsVertical() {
-		var maxW, totalH float64
-		for i, item := range this.items {
-			if _, ok := item.(*Separator); ok {
-				totalH += t.SeparatorSize
-			} else if _, ok := item.(*Button); ok {
-				bw := float64(this.iconSize) + m.L + m.R
-				bh := float64(this.iconSize) + m.T + m.B
-				maxW = math.Max(maxW, bw)
-				totalH += bh
-			} else {
-				hints := item.SizeHints()
-				maxW = math.Max(maxW, hints.Width)
-				totalH += hints.Height
-			}
-			if i > 0 {
-				totalH += this.spacing
-			}
-		}
-		return SizeHints{Width: maxW, Height: totalH + m.T + m.B, Policy: GrowVertical}
-	}
-
-	// horizontal
-	var totalW, maxH float64
+	m := Theme().ButtonMargin
+	var main, cross float64
 	for i, item := range this.items {
-		if _, ok := item.(*Separator); ok {
-			totalW += t.SeparatorSize
-		} else if _, ok := item.(*Button); ok {
-			bw := float64(this.iconSize) + m.L + m.R
-			bh := float64(this.iconSize) + m.T + m.B
-			totalW += bw
-			maxH = math.Max(maxH, bh)
-		} else {
-			hints := item.SizeHints()
-			totalW += hints.Width
-			maxH = math.Max(maxH, hints.Height)
+		hints := this.itemSizeHints(item)
+		w, h := toolbarDimension(hints.Width), toolbarDimension(hints.Height)
+		if this.IsVertical() {
+			w, h = h, w
 		}
+		main += w
+		cross = math.Max(cross, h)
 		if i > 0 {
-			totalW += this.spacing
+			main += this.spacing
 		}
 	}
-	return SizeHints{Width: totalW + m.L + m.R, Height: maxH, Policy: GrowHorizontal}
+	if this.IsVertical() {
+		return SizeHints{Width: cross, Height: main + m.T + m.B, Policy: GrowVertical}
+	}
+	return SizeHints{Width: main + m.L + m.R, Height: cross, Policy: GrowHorizontal}
 }
 
 func (this *ToolBar) OnIdle() {

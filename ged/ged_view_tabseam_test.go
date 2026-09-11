@@ -58,7 +58,9 @@ func TestBothBackendsAskBeforeSpendingTab(t *testing.T) {
 		// Assert the CALL, not the mere mention of the type: a comment naming
 		// IWantsTab, or a renamed identifier that still contains the string,
 		// would satisfy a substring check while the key is still spent.
-		if !strings.Contains(string(src), "focusWidget.(IWantsTab)") ||
+		// keyTarget scopes global focus to the receiving native window while
+		// preserving its owned-popup route; another Form cannot claim Tab.
+		if !strings.Contains(string(src), "win.keyTarget().(IWantsTab)") ||
 			!strings.Contains(string(src), ".WantsTab(") {
 			t.Errorf("%s spends Tab without asking the focused widget; the canvas binding is dead on that backend", f)
 		}
