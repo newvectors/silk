@@ -13,7 +13,7 @@ import (
 const ideVersion = "0.1.3"
 
 func showIDEAbout(parent gui.IWidget) {
-	ged.ShowAboutDialogWithInfo(parent, ged.AboutInfo{Name: "Silk IDE", Version: ideVersion})
+	ged.ShowAboutDialogWithInfo(parent, silkIDEAboutInfo())
 }
 
 func wireDesignerContextPanels(canvas *ged.GedView) {

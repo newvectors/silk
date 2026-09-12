@@ -1,6 +1,13 @@
+<p align="center">
+  <img src="assets/branding/silkide-256.png" width="128" height="128" alt="SilkIDE folded silk S logo">
+</p>
+
 # Silk — Cross-Platform Go UI Framework & Visual Designer
 
 A Go-native GUI framework with a **visual form designer** and **integrated Go IDE**. Drag widgets onto a canvas, arrange nested layouts, generate Go code, then build and run from the same workbench. The project is working toward a Qt Creator-style workflow; it does not claim full feature parity.
+
+The SilkIDE mark is a cyan-to-blue folded silk **S**. Transparent PNGs and
+Windows/macOS application icons live in [assets/branding](assets/branding/README.md).
 
 ---
 
@@ -678,6 +685,9 @@ git push origin feature/my-feature
 ## File Format
 
 Design files use the `.silkui` extension (TDoc-based tree format). Legacy `.cml`, `.silk`, `.form` files are still accepted on load for backwards compatibility.
+
+Gantt chart regression commands, a reproducible `.silkui` fixture and desktop
+verification steps are documented in [GANTT-TESTING.md](GANTT-TESTING.md).
 
 ---
 

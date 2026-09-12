@@ -1,0 +1,274 @@
+//go:build !windows
+
+package gui
+
+import "testing"
+
+type focusReturnObservedMenu struct {
+	Menu
+	beforeHide func()
+}
+
+func (m *focusReturnObservedMenu) Hide() {
+	if m.beforeHide != nil {
+		m.beforeHide()
+	}
+	m.Menu.Hide()
+}
+
+func TestPopupButtonRetainsFocusUntilHideThenRunsCallback(t *testing.T) {
+	for _, input := range []string{"mouse", "menu-keyboard"} {
+		t.Run(input, func(t *testing.T) {
+			isolateFocusReturns(t)
+			preview, chart := focusReturnForm(t)
+			menu := new(focusReturnObservedMenu)
+			menu.Init(menu)
+			menu.SetParent(chart)
+			_, popup := testPopupWindow(menu, WtPopup, preview)
+			popup.popupRestoreFocus = chart
+			button := menu.AddButton1("outdent", nil)
+			menu.SetFocus()
+			hides, calls := 0, 0
+			menu.beforeHide = func() {
+				hides++
+				if !widgetWithinPopups(focusWidget, map[IWidget]bool{menu: true}) {
+					t.Fatal("button restored focus before popup Hide could capture native return")
+				}
+			}
+			button.Action().BindFunc0(func() {
+				calls++
+				if menu.IsVisible() || focusWidget != chart {
+					t.Fatal("callback ran before menu hiding and logical focus restoration")
+				}
+			})
+			if input == "mouse" {
+				mouseHoverWidget = button
+				button.OnLeftDown(1, 1)
+				button.OnLeftUp(1, 1)
+			} else {
+				menu.OnKeyDown(KeyEnd, false)
+				menu.OnKeyDown(KeyEnter, false)
+			}
+			if hides != 1 || calls != 1 {
+				t.Fatalf("hide/callback counts = %d/%d", hides, calls)
+			}
+		})
+	}
+}
+
+func isolateFocusReturns(t *testing.T) {
+	t.Helper()
+	isolatePopupState(t)
+	oldGeneration, oldDepth, oldQuit := transientFocusGeneration, transientTeardownDepth, shouldQuit
+	oldQueue := pendingNativeDestruction
+	transientFocusGeneration, transientTeardownDepth, shouldQuit = 0, 0, false
+	pendingNativeDestruction = nil
+	t.Cleanup(func() {
+		transientFocusGeneration, transientTeardownDepth, shouldQuit = oldGeneration, oldDepth, oldQuit
+		pendingNativeDestruction = oldQueue
+	})
+}
+
+func focusReturnForm(t *testing.T) (*Window, IWidget) {
+	t.Helper()
+	root := NewForm()
+	_, win := testPopupWindow(root, WtForm, nil)
+	win.enabled = true
+	child := NewButton()
+	child.SetParent(root)
+	return win, child
+}
+
+func visibleFocusReturnWindow(w *Window) bool {
+	return w != nil && w.widget != nil && w.widget.IsVisible()
+}
+
+func focusReturnKeyWindowFallback(focused bool) bool { return focused }
+
+func TestPopupHideRejectsForeignSavedFocus(t *testing.T) {
+	isolateFocusReturns(t)
+	_, editor := focusReturnForm(t)
+	preview, chart := focusReturnForm(t)
+	menu := NewMenu(false)
+	menu.SetParent(chart)
+	_, popup := testPopupWindow(menu, WtPopup, preview)
+	popup.popupRestoreFocus = editor // Regression: global focus still in IDE.
+	focusWidget = menu
+	menu.Hide()
+	if focusWidget != preview.widget || focusWidget.OwnerWindow() != preview {
+		t.Fatal("preview menu restored an unrelated IDE widget")
+	}
+	if got := focusTargetForOwner(preview, chart); got != chart {
+		t.Fatal("valid owner-local focus was discarded")
+	}
+}
+
+func TestTransientFocusReturnAfterNativeDestroyRestoresPreview(t *testing.T) {
+	isolateFocusReturns(t)
+	ide, _ := focusReturnForm(t)
+	preview, chart := focusReturnForm(t)
+	dialog := NewDialog("edit task", chart)
+	_, modal := testPopupWindow(dialog, WtForm, nil)
+	modal.enabled = true
+	button := NewButton()
+	button.SetParent(dialog)
+	focusWidget = button
+	r := prepareTransientFocusReturn(modal, preview, chart, func(w *Window) bool { return w == modal })
+	if r == nil {
+		t.Fatal("focused modal did not capture its actual preview owner")
+	}
+	order := []string{}
+	pendingNativeDestruction = append(pendingNativeDestruction, func() {
+		duringTransientTeardown(func() {
+			modal.destroy()
+			noteNativeFocusTransfer() // Cocoa may automatically select IDE.
+			order = append(order, "destroy")
+		})
+	})
+	pendingNativeDestruction = append(pendingNativeDestruction, func() {
+		r.restore(visibleFocusReturnWindow, func(w *Window) bool { return w == ide }, focusReturnKeyWindowFallback, func(w *Window) {
+			if w != preview || focusWidget != chart || modal.widget != nil {
+				t.Fatal("activation ran before teardown or chose the wrong owner/focus")
+			}
+			order = append(order, "focus-preview")
+		})
+	})
+	flushNativeDestruction()
+	if len(order) != 2 || order[0] != "destroy" || order[1] != "focus-preview" {
+		t.Fatalf("wrong teardown/restore order: %v", order)
+	}
+	if preview.keyTarget() != chart {
+		t.Fatal("owner keyboard target did not return to the chart")
+	}
+}
+
+func TestTransientFocusReturnDoesNotStealNewFocus(t *testing.T) {
+	for _, scenario := range []string{"user-window-transfer", "other-app", "new-modal", "new-popup", "owner-hidden", "owner-disabled", "owner-minimized", "owner-destroyed", "target-moved", "target-hidden", "target-disabled-parent", "new-owner-focus", "quit"} {
+		t.Run(scenario, func(t *testing.T) {
+			isolateFocusReturns(t)
+			ide, editor := focusReturnForm(t)
+			preview, chart := focusReturnForm(t)
+			modal, _ := focusReturnForm(t)
+			r := prepareTransientFocusReturn(modal, preview, chart, func(w *Window) bool { return w == modal })
+			focusWidget = nil
+			focused := ide
+			var preserve IWidget
+			switch scenario {
+			case "user-window-transfer":
+				noteNativeFocusTransfer()
+			case "other-app":
+				focused = nil
+			case "new-modal":
+				modal.inModal = true
+			case "new-popup":
+				menu := NewMenu(false)
+				menu.SetParent(chart)
+				testPopupWindow(menu, WtPopup, preview)
+				focusWidget = menu
+			case "owner-hidden":
+				preview.widget.NakedWidget().hidden = true
+			case "owner-disabled":
+				preview.enabled = false
+			case "owner-minimized":
+				preview.iconified = true
+			case "owner-destroyed":
+				preview.destroy()
+			case "target-moved":
+				chart.SetParent(ide.widget)
+			case "target-hidden":
+				chart.Hide()
+			case "target-disabled-parent":
+				container := NewLabel("disabled section")
+				container.SetParent(preview.widget)
+				chart.SetParent(container)
+				container.SetEnabled(false)
+			case "new-owner-focus":
+				editor.SetParent(preview.widget)
+				editor.SetFocus()
+				preserve = editor
+			case "quit":
+				shouldQuit = true
+			}
+			activations := 0
+			r.restore(visibleFocusReturnWindow, func(w *Window) bool { return w == focused }, focusReturnKeyWindowFallback, func(w *Window) { activations++ })
+			wantActivation := scenario == "target-moved" || scenario == "target-hidden" || scenario == "target-disabled-parent" || scenario == "new-owner-focus"
+			if (activations == 1) != wantActivation {
+				t.Fatalf("native activation count = %d", activations)
+			}
+			if preserve != nil && focusWidget != preserve {
+				t.Fatal("return overwrote a newly focused child of the owner")
+			}
+			if scenario == "target-moved" || scenario == "target-hidden" || scenario == "target-disabled-parent" {
+				if focusWidget != preview.widget {
+					t.Fatal("invalid saved child did not fall back to its actual owner")
+				}
+			}
+		})
+	}
+}
+
+func TestTransientFocusReturnRequiresOriginalNativeFamilyFocus(t *testing.T) {
+	isolateFocusReturns(t)
+	preview, chart := focusReturnForm(t)
+	modal, _ := focusReturnForm(t)
+	if r := prepareTransientFocusReturn(modal, preview, chart, func(*Window) bool { return false }); r != nil {
+		t.Fatal("background transient scheduled application activation")
+	}
+	if r := prepareTransientFocusReturn(modal, preview, chart, func(w *Window) bool { return w == preview }); r == nil {
+		t.Fatal("non-activating popup lost its natively focused owner")
+	}
+}
+
+func TestTransientTeardownDoesNotSuppressLaterUserFocusTransfers(t *testing.T) {
+	isolateFocusReturns(t)
+	duringTransientTeardown(func() { noteNativeFocusTransfer() })
+	if transientFocusGeneration != 0 || transientTeardownDepth != 0 {
+		t.Fatal("synchronous teardown focus confused with user intent")
+	}
+	noteNativeFocusTransfer()
+	if transientFocusGeneration != 1 {
+		t.Fatal("later user focus transfer did not invalidate pending returns")
+	}
+}
+
+func TestTransientFocusReturnDistinguishesActiveAppFromKeyWindowGap(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		appActive   bool
+		keyFocused  bool
+		newIntent   bool
+		wantRestore bool
+	}{
+		{"active-app-without-key-window", true, false, false, true},
+		{"inactive-app-without-key-window", false, false, false, false},
+		{"inactive-app-stale-key-window", false, true, false, false},
+		{"new-focus-intent-in-active-app", true, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateFocusReturns(t)
+			preview, chart := focusReturnForm(t)
+			popup, _ := focusReturnForm(t)
+			r := prepareTransientFocusReturn(popup, preview, chart, func(w *Window) bool { return w == popup })
+			if tc.newIntent {
+				noteNativeFocusTransfer()
+			}
+			focusWidget = chart // Existing logical focus is already correct.
+			activations := 0
+			r.restore(visibleFocusReturnWindow,
+				func(w *Window) bool { return tc.keyFocused && w == preview },
+				func(bool) bool { return tc.appActive },
+				func(w *Window) {
+					if w != preview {
+						t.Fatal("activated a foreign owner")
+					}
+					activations++
+				})
+			if (activations == 1) != tc.wantRestore {
+				t.Fatalf("native restore calls = %d, want restore %v", activations, tc.wantRestore)
+			}
+			if focusWidget != chart {
+				t.Fatal("native focus repair changed already-correct logical focus")
+			}
+		})
+	}
+}

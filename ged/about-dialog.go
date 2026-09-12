@@ -23,6 +23,7 @@ const aboutCopyright = "Silk SDK"
 type AboutInfo struct {
 	Name    string
 	Version string
+	Logo    paint.Icon // Optional host identity; nil retains the SDK default.
 }
 
 // ShowAboutDialog keeps the standalone designer entry point compatible.
@@ -58,6 +59,9 @@ func newAboutDialog(parent gui.IWidget, info AboutInfo) *gui.Dialog {
 		info.Name = "Silk Designer"
 	}
 	dlg := gui.NewDialog(i18n.T("About")+" "+info.Name, parent)
+	if info.Logo != nil {
+		dlg.SetIcon(info.Logo)
+	}
 	body := &aboutContent{info: info}
 	body.Init(body)
 	body.SetFocusPolicy(gui.NoFocus)
@@ -194,7 +198,15 @@ func (c *aboutContent) textLayout(width float64) ([]aboutTextLine, float64) {
 		}
 		return top
 	}
-	y = add(c.info.Name, title, 0, y, width, false) + 8
+	titleX := 0.0
+	if c.info.Logo != nil && !c.info.Logo.IsAir() && width >= 120 {
+		titleX = 64
+	}
+	y = add(c.info.Name, title, titleX, y, width-titleX, false)
+	if titleX > 0 {
+		y = math.Max(y, 50)
+	}
+	y += 8
 	y = add(i18n.T("A visual designer for Go interfaces."), body, 0, y, width, false)
 	y = add(i18n.T("Drag, arrange and generate Go."), body, 0, y, width, true) + 20
 	rows := c.details()
@@ -291,6 +303,9 @@ func (c *aboutContent) Draw(g paint.Painter) {
 	defer g.RestoreTo(state)
 	g.Rectangle(0, 0, w, h)
 	g.Clip()
+	if c.info.Logo != nil && !c.info.Logo.IsAir() && w-4 >= 120 {
+		g.DrawIcon1(c.info.Logo, 0, 2-c.ScrollY(), 48, false)
+	}
 	lines, _ := c.textLayout(w - 4)
 	for _, line := range lines {
 		y := line.y - c.ScrollY()

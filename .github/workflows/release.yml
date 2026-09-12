@@ -73,6 +73,7 @@ jobs:
           path-type: inherit
           install: |
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-binutils
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-cairo
 
@@ -94,7 +95,7 @@ jobs:
 
       # ─── Test ───
       - name: Run tests
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/
 
       - name: Test platform packaging scripts
         shell: bash
@@ -116,6 +117,11 @@ jobs:
           CGO_ENABLED: '1'
         run: |
           go build -v -ldflags="-s -w" -o silk-demo-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} demo.go
+
+      - name: Embed Windows IDE icon
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-windows-icon.sh
 
       - name: Build IDE and generator
         env:
@@ -140,9 +146,11 @@ jobs:
           cp silkide-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkide
           cp silkgen-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkgen
           cp -r icon dist/silk-${{ matrix.label }}/
+          bash scripts/package-silkide-branding.sh '${{ matrix.goos }}' 'dist/silk-${{ matrix.label }}'
           cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
           cat > dist/silk-${{ matrix.label }}/RUNTIME-DEPENDENCIES.txt <<'EOF'
-          This archive is not a standalone portable app bundle.
+          The macOS SilkIDE.app includes its native icon and SDK resources, but
+          this archive is not a standalone portable distribution.
           macOS: install Cairo with Homebrew (brew install cairo); Homebrew dylibs
           are external dependencies and are not bundled or relocated here.
           These binaries target their CI runner's runtime; compatibility with
@@ -173,6 +181,7 @@ jobs:
           cp silkide-${{ matrix.label }}.exe "$OUT/silkide.exe"
           cp silkgen-${{ matrix.label }}.exe "$OUT/silkgen.exe"
           cp -r icon "$OUT/"
+          bash scripts/package-silkide-branding.sh windows "$OUT"
           cp README.md LICENSE CHANGELOG.md "$OUT/"
 
           bash scripts/bundle-windows-dlls.sh "$OUT"

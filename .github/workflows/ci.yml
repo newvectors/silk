@@ -112,7 +112,7 @@ jobs:
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
 
       - name: Test (IDE engines)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
       - name: Build legacy entry points
         if: runner.os != 'Windows'

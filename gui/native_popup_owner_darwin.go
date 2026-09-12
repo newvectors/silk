@@ -6,6 +6,7 @@ package gui
 #cgo LDFLAGS: -framework Cocoa
 int silkBindPopupOwner(void *popup, void *owner);
 void silkUnbindPopupOwner(void *popup);
+int silkApplicationActive(void);
 */
 import "C"
 
@@ -29,4 +30,15 @@ func unbindNativePopupOwner(popup *glfw.Window) {
 	if popup != nil {
 		C.silkUnbindPopupOwner(popup.GetCocoaWindow())
 	}
+}
+
+// AppKit can have no key window between closing a popup/dialog and choosing
+// another Form, while this application remains active. Do not confuse that
+// short transition with the user switching to a different application.
+func nativeApplicationActive(keyWindowFocused bool) bool {
+	active := int(C.silkApplicationActive())
+	if active < 0 {
+		return keyWindowFocused // Off-thread/unknown: retain conservative fallback.
+	}
+	return active != 0
 }

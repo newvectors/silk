@@ -1,9 +1,11 @@
 package paint
 
 import (
+	"encoding/binary"
 	"github.com/uk0/silk/cairo"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/hashmap"
+	"math"
 	"runtime"
 	"strconv"
 	"sync/atomic"
@@ -80,8 +82,11 @@ func murmur3_32(b []byte) uint32 {
 }
 
 type scaledFontCacheKey struct {
-	m    *geom.Mat3x2
-	face *cairo.FontFace
+	// Value snapshots are essential: callers reuse/mutate their CTM, and Cairo
+	// may return the same toy face for several font sizes.
+	m          geom.Mat3x2
+	face       *cairo.FontFace
+	fontMatrix geom.Mat3x2
 }
 
 func equalScaledFontCacheKey(a, b interface{}) bool {
@@ -90,20 +95,26 @@ func equalScaledFontCacheKey(a, b interface{}) bool {
 	}
 	ma := a.(*scaledFontCacheKey)
 	mb := b.(*scaledFontCacheKey)
-	return ma.face == mb.face && (ma.m == mb.m ||
-		ma.m != nil && mb.m != nil &&
-			ma.m.Xx == mb.m.Xx && ma.m.Yx == mb.m.Yx &&
-			ma.m.Xy == mb.m.Xy && ma.m.Yy == mb.m.Yy &&
-			ma.m.X0 == mb.m.X0 && ma.m.Y0 == mb.m.Y0)
+	return *ma == *mb
 }
 
 func hashScaledFontCacheKey(i interface{}) uint32 {
-	m := i.(*scaledFontCacheKey)
-	// Hand the key to the hash as a slice, never as a uintptr: an address
-	// carried in an integer has no pointer provenance, so the GC may collect
-	// the key mid-hash and -race's checkptr aborts the process on the
-	// uintptr -> unsafe.Pointer conversion.
-	return murmur3_32(unsafe.Slice((*byte)(unsafe.Pointer(m)), unsafe.Sizeof(*m)))
+	k := i.(*scaledFontCacheKey)
+	// Hash the same values equality compares, not the address of a caller's
+	// matrix or struct padding. The face address is identity only: never turn
+	// the integer back into a pointer (which would violate checkptr provenance).
+	var data [13 * 8]byte
+	binary.LittleEndian.PutUint64(data[:8], uint64(uintptr(unsafe.Pointer(k.face))))
+	values := [...]float64{k.m.Xx, k.m.Yx, k.m.Xy, k.m.Yy, k.m.X0, k.m.Y0,
+		k.fontMatrix.Xx, k.fontMatrix.Yx, k.fontMatrix.Xy, k.fontMatrix.Yy, k.fontMatrix.X0, k.fontMatrix.Y0}
+	for n, value := range values {
+		// Go considers +0 and -0 equal; their hashes must also be equal.
+		if value == 0 {
+			value = 0
+		}
+		binary.LittleEndian.PutUint64(data[(n+1)*8:], math.Float64bits(value))
+	}
+	return murmur3_32(data[:])
 }
 
 type ScaledFont interface {
@@ -328,20 +339,22 @@ func (this *font) scaledFont(ctm *geom.Mat3x2) *scaledFont {
 	var sf *scaledFont
 	scaledFontCacheAccessId++
 	face := this.Face()
-	key := &scaledFontCacheKey{ctm, face}
+	key := &scaledFontCacheKey{m: identityMatrix, face: face}
+	if ctm != nil {
+		key.m = *ctm
+	}
+	key.fontMatrix.InitScale(float64(this.size), float64(this.size))
 	isf, ok := scaledFontCache.Find(key)
 	if ok {
 		sf = isf.(*scaledFont)
 		sf.access = scaledFontCacheAccessId
 	} else {
-		if ctm == nil {
-			ctm = &identityMatrix
-		}
-		var m geom.Mat3x2
-		m.InitScale(float64(this.size), float64(this.size))
 		sf0 := cairo.NewScaledFont(face,
-			&m, ctm, globalFontOptions)
-		sf = &scaledFont{sf0, this, scaledFontCacheAccessId}
+			&key.fontMatrix, &key.m, globalFontOptions)
+		// The cache entry represents this font at creation time, even if the
+		// original Font is subsequently resized or restyled in place.
+		snapshot := *this
+		sf = &scaledFont{sf0, &snapshot, scaledFontCacheAccessId}
 		sf.setFinalizer()
 		scaledFontCache.Insert(key, sf)
 	}

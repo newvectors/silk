@@ -86,6 +86,57 @@ func (r *ganttPaintRecorder) DrawText1(x, y float64, s string) {
 func ganttPixel(img image.Image, x, y int) paint.Color {
 	return paint.ColorModel.Convert(img.At(x, y)).(paint.Color)
 }
+
+func TestGanttTableKeepsFullDatesAndDropsOptionalColumns(t *testing.T) {
+	c := chartFixture(t)
+	f := Theme().Font
+	b := f.Dup()
+	b.SetBold(true)
+	for _, width := range []float64{100, 249, 320, 430, 600, 1000} {
+		c.SetTableWidth(width)
+		c.SetSize(1400, 330)
+		l := c.geometry()
+		cols := c.tableColumns(l)
+		if width == 430 && len(cols) < 3 {
+			t.Fatal("default chart must show start and finish dates")
+		}
+		sum := 0.0
+		for _, w := range cols {
+			if w <= 0 {
+				t.Fatalf("non-positive column: %v", cols)
+			}
+			sum += w
+		}
+		if math.Abs(sum-l.split) > .001 {
+			t.Fatalf("columns overflow table: %v split=%v", cols, l.split)
+		}
+		if len(cols) >= 3 {
+			for _, font := range []paint.Font{f, b} {
+				for _, date := range []string{"2026-04-06", "2026-12-31", "8888-08-28"} {
+					if got := ganttElide(font, date, cols[1]-8); got != date {
+						t.Fatalf("table=%v date clipped to %q: %v", width, got, cols)
+					}
+				}
+			}
+		}
+	}
+	// Verify the actual draw path, not only the column geometry.
+	c.SetTableWidth(430)
+	c.SetSize(960, 330)
+	pix := paint.NewPixmap(960, 330)
+	rec := &ganttPaintRecorder{Painter: pix.NewPainter()}
+	c.Draw(rec)
+	for _, want := range []string{"2026-04-06", "2026-04-09"} {
+		found := false
+		for _, text := range rec.text {
+			found = found || text == want
+		}
+		if !found {
+			t.Fatalf("full date %q missing from rendered table", want)
+		}
+	}
+}
+
 func TestGanttDrawThemeTokensRetinaAndAlignedRows(t *testing.T) {
 	mode := CurrentThemeMode()
 	t.Cleanup(func() { SetThemeMode(mode) })

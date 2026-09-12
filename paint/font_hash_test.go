@@ -13,7 +13,7 @@ import (
 // points to invalid allocation" on the first text measurement, before a single
 // test ran.
 func TestHashScaledFontCacheKeyRuns(t *testing.T) {
-	k := &scaledFontCacheKey{&geom.Mat3x2{1, 0, 0, 1, 0, 0}, nil}
+	k := &scaledFontCacheKey{m: geom.Mat3x2{1, 0, 0, 1, 0, 0}}
 	if hashScaledFontCacheKey(k) != hashScaledFontCacheKey(k) {
 		t.Fatal("hashScaledFontCacheKey is not deterministic for one key")
 	}

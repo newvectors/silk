@@ -229,6 +229,9 @@ func (m *GanttModel) UpdateTask(task GanttTask, cascade bool) error {
 		}
 	}
 	tasks[i] = task
+	if task.ParentID != m.tasks[i].ParentID {
+		ganttPreserveEmptiedSummaries(m.tasks, tasks)
+	}
 	return m.commit(tasks, cascade)
 }
 
@@ -252,13 +255,15 @@ func (m *GanttModel) RemoveTask(id string) error {
 			kept = append(kept, task)
 		}
 	}
+	ganttPreserveEmptiedSummaries(m.tasks, kept)
 	return m.commit(kept, false)
 }
 
 // ReparentTask moves a whole subtree without changing its calendar dates.
 // An empty newParentID promotes it to a root. Both old and new ancestors are
 // summarized; a former parent with no remaining children becomes an ordinary
-// leaf retaining its last range. Invalid FS/hierarchy changes are rejected.
+// leaf retaining its last range (a milestone if that range has zero duration).
+// Invalid FS/hierarchy changes are rejected.
 func (m *GanttModel) ReparentTask(id, newParentID string) error {
 	tasks := m.Tasks()
 	i, err := ganttTaskIndex(tasks, id)
@@ -274,7 +279,30 @@ func (m *GanttModel) ReparentTask(id, newParentID string) error {
 		}
 	}
 	tasks[i].ParentID = newParentID
+	ganttPreserveEmptiedSummaries(m.tasks, tasks)
 	return m.commit(tasks, false)
+}
+
+// A summary containing only same-day milestones legitimately has Start==End.
+// When a structural edit removes its last child, retain that date/progress as
+// a milestone instead of rejecting the edit as an invalid zero-length leaf.
+// Only emptied existing summaries are converted; imports and ordinary leaves
+// still undergo strict date/type validation, and nonempty summaries stay groups.
+func ganttPreserveEmptiedSummaries(before, after []GanttTask) {
+	hadChildren := make(map[string]bool)
+	for _, task := range before {
+		if task.ParentID != "" {
+			hadChildren[task.ParentID] = true
+		}
+	}
+	for _, task := range after {
+		delete(hadChildren, task.ParentID)
+	}
+	for i := range after {
+		if hadChildren[after[i].ID] && after[i].Start.Equal(after[i].End) {
+			after[i].Milestone = true
+		}
+	}
 }
 
 func ganttSubtree(tasks []GanttTask, id string) map[string]bool {

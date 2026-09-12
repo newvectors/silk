@@ -24,6 +24,7 @@ type WelcomeScreen struct {
 	cbNewProject func()
 	cbOpenFile   func()
 	cbOpenRecent func(string)
+	branding     AboutInfo
 
 	// Button hit regions (computed during Draw)
 	btnNewRect  [4]float64 // x, y, w, h
@@ -44,6 +45,13 @@ func NewWelcomeScreen() *WelcomeScreen {
 func (this *WelcomeScreen) SetRecentFiles(files []string) {
 	this.recentFiles = files
 	this.Self().Update()
+}
+
+// SetBranding lets an IDE host supply its name, version and logo without
+// changing the standalone SDK designer's default identity.
+func (this *WelcomeScreen) SetBranding(info AboutInfo) {
+	this.branding = info
+	this.Update()
 }
 
 // SetNewProjectCallback sets the callback for the "New Project" button.
@@ -141,25 +149,42 @@ func (this *WelcomeScreen) Draw(g paint.Painter) {
 	leftX := cx
 
 	fontFamily := gui.Theme().Font.Family()
+	name, version := "Silk Designer", aboutAppVersion
+	description := "Cross-platform GUI designer with 62+ widgets,"
+	footerName := "Silk UI Framework"
+	if strings.TrimSpace(this.branding.Name) != "" {
+		name = this.branding.Name
+		description = "Go code editing and visual interface design,"
+		footerName = name
+	}
+	if strings.TrimSpace(this.branding.Version) != "" {
+		version = "v" + strings.TrimPrefix(this.branding.Version, "v")
+	}
 
 	// Title: "Silk Designer" (28pt bold)
 	titleFont := paint.NewFont(fontFamily, 28, true, false)
 	g.SetFont(titleFont)
 	g.SetBrush1(pal.title)
 	titleY := cy + 42
-	g.DrawText1(leftX, titleY, "Silk Designer")
+	titleX := leftX
+	if this.branding.Logo != nil && !this.branding.Logo.IsAir() && leftW >= 220 {
+		g.DrawIcon1(this.branding.Logo, leftX, titleY-44, 56, false)
+		titleX += 68
+	}
+	g.SetBrush1(pal.title)
+	g.DrawText1(titleX, titleY, name)
 
 	// Subtitle (accent color)
 	subFont := paint.NewFont(fontFamily, 13, true, false)
 	g.SetFont(subFont)
 	g.SetBrush1(pal.accent)
-	g.DrawText1(leftX, titleY+22, aboutAppVersion+"  \u00b7  Go UI Framework")
+	g.DrawText1(leftX, titleY+22, version+"  \u00b7  Go UI Framework")
 
 	// Short description (muted)
 	descFont := paint.NewFont(fontFamily, 11, false, false)
 	g.SetFont(descFont)
 	g.SetBrush1(pal.muted)
-	g.DrawText1(leftX, titleY+44, "Cross-platform GUI designer with 62+ widgets,")
+	g.DrawText1(leftX, titleY+44, description)
 	g.DrawText1(leftX, titleY+60, "visual designer, and integrated IDE.")
 
 	// Accent underline
@@ -315,7 +340,7 @@ func (this *WelcomeScreen) Draw(g paint.Painter) {
 	g.SetFont(footerFont)
 	g.SetBrush1(pal.muted)
 	g.DrawText1(cx, cy+contentH-6,
-		"Silk UI Framework  \u00b7  "+aboutAppVersion+"  \u00b7  "+aboutCopyright)
+		footerName+"  \u00b7  "+version+"  \u00b7  "+aboutCopyright)
 }
 
 // fileIconColor picks a subtle accent color for the given file extension,

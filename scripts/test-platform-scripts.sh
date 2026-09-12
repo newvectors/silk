@@ -68,3 +68,4 @@ for required in build-essential pkg-config libcairo2-dev libx11-dev libxcursor-d
   grep -qx "$required" <<< "$deps"
 done
 echo 'PASS: Linux dependencies; DLL copy/failure, duplicates, conflicts, missing and foreign dependencies'
+bash "$root/scripts/test-branding-packaging.sh"

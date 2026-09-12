@@ -60,6 +60,7 @@ func main() {
 	prefs := newPreferences()
 	globalPrefs = prefs
 
+	gui.SetAppIcon(silkIDEIcon())
 	frame := gui.NewFrameWindow()
 	frame.SetUuidStr("c1d8e2f0-1a3b-4c2d-9e7f-silkide00001")
 	frame.SetTitle(idTitle())
@@ -478,6 +479,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	// Open dispatches through the same handlers the toolbar uses.
 	if globalPrefs != nil {
 		welcome := ged.NewWelcomeScreen()
+		welcome.SetBranding(silkIDEAboutInfo())
 		w.welcome = welcome
 		welcome.SetRecentFiles(globalPrefs.RecentFiles())
 		welcome.SetNewProjectCallback(func() {

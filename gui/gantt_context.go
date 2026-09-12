@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -10,19 +11,29 @@ import (
 )
 
 var showGanttDialog = (*Dialog).ShowModal
+var showGanttContextMenu = (*Menu).ShowAsPopup
 
 func (c *GanttChart) OnRightUp(x, y float64) {
-	if !c.interactive() {
+	if !c.interactive() || !ganttFinite(x) || !ganttFinite(y) {
 		return
 	}
 	c.CancelInteraction()
+	c.SetFocus()
+	if !c.interactive() || !c.HasFocus() {
+		return
+	}
 	if hit := c.hitTest(x, y); hit.row >= 0 {
-		c.SetSelectedTaskID(c.rows[hit.row].Task.ID)
+		id := c.rows[hit.row].Task.ID
+		model, revision := c.model, c.model.Revision()
+		c.SetSelectedTaskID(id)
+		if c.model != model || model.Revision() != revision || !c.interactive() || !c.HasFocus() || c.selectedID != id || c.hitTest(x, y) != hit {
+			return
+		}
 	}
 	m := c.buildGanttContextMenu()
 	m.SetParent(c)
 	gx, gy := c.MapToGlobal(x, y)
-	m.ShowAsPopup(gx, gy, true)
+	showGanttContextMenu(m, gx, gy, true)
 }
 
 func (c *GanttChart) buildGanttContextMenu() *Menu {
@@ -231,24 +242,11 @@ func (c *GanttChart) editGanttTask(id, parent string) {
 			}
 		}
 		taskSnapshot := c.Tasks()
-		before := c.Tasks()
 		var err error
 		if c.readOnly || !c.interactive() {
 			err = fmt.Errorf("%s", i18n.T("Gantt chart is read-only"))
 		} else if editing {
-			found := false
-			for i, t := range before {
-				if t.ID == next.ID {
-					before[i] = next
-					found = true
-					break
-				}
-			}
-			if !found {
-				err = fmt.Errorf("task %s no longer exists", next.ID)
-			} else {
-				err = c.model.SetTasks(before)
-			}
+			err = c.model.UpdateTask(next, c.cascadeDependencies)
 		} else {
 			err = c.model.AddTask(next)
 		}
@@ -263,6 +261,24 @@ func (c *GanttChart) editGanttTask(id, parent string) {
 		c.commitNotification(taskSnapshot)
 		dlg.onBtnClick(dialogResultKey(DialogOK))
 	})
-	dlg.SetSize(590, 470)
+	sizeGanttTaskDialog(dlg, form)
 	_ = showGanttDialog(dlg)
+}
+
+// FormLayout right-aligns its labels, so a fixed label width crops long
+// translated text on the left. Measure the actual label/field fonts at dialog
+// construction and reserve both readable labels and usable date inputs.
+func sizeGanttTaskDialog(dlg *Dialog, form *FormLayout) {
+	labelWidth, rowHeight := 120.0, 32.0
+	for _, row := range form.rows {
+		label, field := formRowHints(row)
+		labelWidth = math.Max(labelWidth, label.Width+8)
+		rowHeight = math.Max(rowHeight, math.Max(label.Height, field.Height)+8)
+	}
+	form.SetLabelWidth(math.Ceil(labelWidth))
+	form.SetRowHeight(math.Ceil(rowHeight))
+	fieldWidth := math.Max(280, Theme().Font.TextExtents("0000-00-00").Width+24)
+	width := form.LabelWidth() + form.Spacing() + fieldWidth + 48
+	height := form.SizeHints().Height + 20 + dialogButtonBarHeight + 16
+	dlg.SetSize(math.Max(590, math.Ceil(width)), math.Max(470, math.Ceil(height)))
 }

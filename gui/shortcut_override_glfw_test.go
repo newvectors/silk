@@ -65,4 +65,15 @@ func TestFocusedShortcutOverridePrecedesHostButStaysWindowScoped(t *testing.T) {
 	if child.calls != 1 || globalCalls != 3 {
 		t.Fatal("disabled widget intercepted shortcut")
 	}
+	child.SetEnabled(true)
+	frame.SetEnabled(false)
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods)
+	if child.calls != 1 || globalCalls != 4 {
+		t.Fatal("widget inside disabled ancestor intercepted shortcut")
+	}
+	frame.SetEnabled(true)
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods)
+	if child.calls != 2 || globalCalls != 4 {
+		t.Fatal("re-enabled ancestor did not restore focused shortcut")
+	}
 }

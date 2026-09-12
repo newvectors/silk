@@ -1,0 +1,9 @@
+Use case: logo-brand
+Asset type: the primary desktop application logo for SilkIDE, a native Go integrated development environment and visual UI designer.
+Primary request: Create one finished, distinctive, premium app logo: an abstract capital S formed by a single wide folded silk ribbon, combining smooth silk flow with the crisp geometry of a visual interface designer. The silhouette must remain simple and recognizable at 24 and 32 pixels. The two turns of the S should evoke two interlocking modular UI panels, with clear negative space, not a tangled knot.
+Style/medium: polished vector-like raster artwork, precise geometric edges, restrained smooth gradients on broad ribbon surfaces, subtle fold contrast, professional developer-tool identity. Flat orthographic frontal view, not a 3D product mockup.
+Color palette: luminous cyan and clear interface blue, moving from approximately #32D4DD on the upper fold to #398EF6 and #5368E8 on the lower fold. Restrained deep blue at the folds for definition. Strong legibility on both white and dark charcoal backgrounds.
+Composition/framing: square 1024 by 1024 canvas; one centered isolated symbol occupying about 78 percent of canvas width and height; generous even transparent padding.
+Scene/backdrop: actual transparent alpha background. No background tile, no opaque white canvas, no fake checkerboard.
+Text: none. The symbol itself is an S monogram, no accompanying wordmark.
+Constraints: exactly one final mark, no presentation sheet, no multiple variations, no border, no watermark, no tagline, no mascot, no circuitry, no tiny decorative nodes, no drop shadow beyond the silhouette, no glow, no photographs. Keep the construction clean enough for high-DPI Windows, Linux and macOS icons.

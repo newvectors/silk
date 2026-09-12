@@ -13,6 +13,7 @@ type ganttGesture struct {
 	kind, id                           string
 	x, y, scrollX, scrollY, tableWidth float64
 	before                             []GanttTask
+	task                               GanttTask
 	preview                            *GanttModel
 	lastDays                           int
 	lastProgress                       float64
@@ -29,7 +30,7 @@ func (c *GanttChart) interactive() bool {
 func (c *GanttChart) hitTest(x, y float64) ganttHit {
 	l := c.geometry()
 	none := ganttHit{row: -1}
-	if x < 0 || y < 0 || x >= l.w || y >= l.h {
+	if !ganttFinite(x) || !ganttFinite(y) || x < 0 || y < 0 || x >= l.w || y >= l.h {
 		return none
 	}
 	if math.Abs(x-l.split) <= 3 && y < l.bottom {
@@ -88,9 +89,20 @@ func (c *GanttChart) OnLeftDown(x, y float64) {
 	}
 	c.CancelInteraction()
 	c.SetFocus()
+	if !c.interactive() || !c.HasFocus() {
+		return
+	}
 	hit := c.hitTest(x, y)
 	if hit.row >= 0 {
-		c.SetSelectedTaskID(c.rows[hit.row].Task.ID)
+		id := c.rows[hit.row].Task.ID
+		model, revision := c.model, c.model.Revision()
+		c.SetSelectedTaskID(id)
+		// Selection is a public SDK callback: the host may replace/collapse
+		// tasks, open a dialog, or change geometry/read-only state. Never use
+		// the old row index or start capture after that input became stale.
+		if c.model != model || model.Revision() != revision || !c.interactive() || !c.HasFocus() || c.selectedID != id || c.hitTest(x, y) != hit {
+			return
+		}
 	}
 	if hit.kind == "collapse" {
 		r := c.rows[hit.row]
@@ -103,6 +115,7 @@ func (c *GanttChart) OnLeftDown(x, y float64) {
 	d := &ganttGesture{kind: hit.kind, x: x, y: y, scrollX: c.scrollX, scrollY: c.scrollY, tableWidth: c.tableWidth, lastDays: 0, lastProgress: -1}
 	if hit.row >= 0 {
 		d.id = c.rows[hit.row].Task.ID
+		d.task = c.rows[hit.row].Task
 		d.before = c.Tasks()
 	}
 	c.drag = d
@@ -156,6 +169,10 @@ func (c *GanttChart) previewGesture(x, y float64) {
 	if d == nil || !ganttFinite(x) || !ganttFinite(y) {
 		return
 	}
+	days := int(ganttClamp(math.Round((x-d.x)/c.dayWidth), -3650000, 3650000))
+	if (d.kind == "move" || d.kind == "start" || d.kind == "end") && days == d.lastDays {
+		return
+	}
 	l := c.geometry()
 	switch d.kind {
 	case "split":
@@ -186,46 +203,38 @@ func (c *GanttChart) previewGesture(x, y float64) {
 		c.CancelInteraction()
 		return
 	}
+	// Mouse motion within the same snapped day/percent is a no-op. Check
+	// before copying and validating the entire task graph, not after it.
+	t := d.task
+	progress := 0.0
+	if d.kind == "progress" {
+		b := c.taskRect(t, c.rowIndex[d.id], l)
+		progress = math.Round(ganttClamp((x-b.X)/b.Width, 0, 1)*100) / 100
+		if progress == d.lastProgress {
+			return
+		}
+	}
 	m, err := NewGanttModel(d.before)
 	if err != nil {
 		c.lastError = err
 		return
 	}
-	t, ok := m.Task(d.id)
-	if !ok {
-		return
-	}
-	days := int(ganttClamp(math.Round((x-d.x)/c.dayWidth), -3650000, 3650000))
 	switch d.kind {
 	case "move":
-		if days == d.lastDays {
-			return
-		}
 		err = m.MoveTask(d.id, days, c.cascadeDependencies)
 	case "start":
-		if days == d.lastDays {
-			return
-		}
 		start := t.Start.AddDate(0, 0, days)
 		if !start.Before(t.End) {
 			start = t.End.AddDate(0, 0, -1)
 		}
 		err = m.ResizeTask(d.id, start, t.End, c.cascadeDependencies)
 	case "end":
-		if days == d.lastDays {
-			return
-		}
 		end := t.End.AddDate(0, 0, days)
 		if !end.After(t.Start) {
 			end = t.Start.AddDate(0, 0, 1)
 		}
 		err = m.ResizeTask(d.id, t.Start, end, c.cascadeDependencies)
 	case "progress":
-		b := c.taskRect(t, c.rowIndex[d.id], l)
-		progress := math.Round(ganttClamp((x-b.X)/b.Width, 0, 1)*100) / 100
-		if progress == d.lastProgress {
-			return
-		}
 		err = m.SetProgress(d.id, progress)
 		d.lastProgress = progress
 	}
@@ -243,7 +252,7 @@ func (c *GanttChart) OnLeftUp(x, y float64) {
 	if c.drag == nil {
 		return
 	}
-	if !c.HasCapture() || !c.interactive() {
+	if !c.HasCapture() || !c.interactive() || !ganttFinite(x) || !ganttFinite(y) {
 		c.CancelInteraction()
 		return
 	}
@@ -285,9 +294,15 @@ func (c *GanttChart) CancelInteraction() {
 	c.Update()
 }
 func (c *GanttChart) Cursor() *Cursor {
+	if !c.interactive() {
+		return DefaultCursor()
+	}
 	h := c.hover.kind
 	if c.drag != nil {
 		h = c.drag.kind
+	}
+	if c.readOnly && (h == "start" || h == "end" || h == "move" || h == "progress") {
+		return DefaultCursor()
 	}
 	switch h {
 	case "start", "end", "split":

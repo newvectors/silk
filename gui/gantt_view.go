@@ -141,12 +141,34 @@ func ganttText(g paint.Painter, text string, col paint.Color, f paint.Font, x, y
 	g.DrawText1(x+4-te.XBearing, y+(h-fe.Height)/2+fe.Ascent, text)
 }
 func (c *GanttChart) tableColumns(l ganttLayout) []float64 {
-	if l.split < 250 {
+	// Keep calendar dates readable, including bold summary rows. Proportional
+	// shrinking used to turn both dates into indistinguishable "2026-0…".
+	// Drop optional trailing columns instead of truncating essential dates.
+	f := Theme().Font
+	b := f.Dup()
+	b.SetBold(true)
+	measure := func(s string) float64 {
+		return math.Ceil(math.Max(f.TextExtents(s).Width, b.TextExtents(s).Width)) + 10
+	}
+	nameMin := math.Max(108, measure(i18n.T("Task"))+20)
+	date := math.Max(measure("8888-88-88"), math.Max(measure(i18n.T("Start")), measure(i18n.T("Finish"))))
+	progress := math.Max(measure("100%"), measure(i18n.T("Progress")))
+	owner := math.Max(64, measure(i18n.T("Owner")))
+	if l.split < nameMin+2*date {
 		return []float64{l.split}
 	}
-	// Reserve dates/progress/owner first; the name owns the remaining space.
-	s := math.Min(1, l.split/490)
-	return []float64{l.split - 320*s, 84 * s, 84 * s, 62 * s, 90 * s}
+	cols := []float64{0, date, date}
+	remaining := l.split - 2*date
+	if remaining >= nameMin+progress {
+		cols = append(cols, progress)
+		remaining -= progress
+		if remaining >= nameMin+owner {
+			cols = append(cols, owner)
+			remaining -= owner
+		}
+	}
+	cols[0] = remaining
+	return cols
 }
 
 func (c *GanttChart) Draw(g paint.Painter) {

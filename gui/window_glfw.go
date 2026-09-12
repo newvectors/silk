@@ -296,7 +296,7 @@ func (this *Window) create(p *Window, wt WindowType) error {
 				this.popupOwner = parent.OwnerWindow()
 			}
 		}
-		this.popupRestoreFocus = focusWidget
+		this.popupRestoreFocus = focusTargetForOwner(this.popupOwner, focusWidget)
 	}
 
 	if p != nil {
@@ -451,7 +451,9 @@ func (this *Window) destroy() {
 		// callback. Freeing that native window here made Cmd+Q use freed
 		// memory on return. Detach now; release after outer event dispatch.
 		native := this.glfwWin
-		pendingNativeDestruction = append(pendingNativeDestruction, native.Destroy)
+		pendingNativeDestruction = append(pendingNativeDestruction, func() {
+			duringTransientTeardown(native.Destroy)
+		})
 		this.glfwWin = nil
 	}
 }
@@ -976,7 +978,9 @@ func (this *Window) SetTitle(s string) {
 }
 
 func (this *Window) SetIcon(icon paint.Icon) {
-	// GLFW icon setting is limited; skip for now
+	if this.glfwWin != nil {
+		applyGLFWWindowIcon(runtime.GOOS, icon, this.glfwWin.SetIcon)
+	}
 }
 
 func (this *Window) updateTitle() {
@@ -1175,11 +1179,17 @@ func (this *Window) IsVisible() bool {
 }
 
 func (this *Window) setVisible(b bool) {
+	var focusReturn *transientFocusReturn
 	if !b {
+		if this.wt == WtPopup && this.widget != nil && widgetWithinPopups(focusWidget, map[IWidget]bool{this.widget: true}) {
+			focusReturn = prepareTransientFocusReturn(this, this.popupOwner, this.popupRestoreFocus, nativeWindowFocused)
+		} else if this.wt == WtPopup {
+			debugFocusReturn("prepare-skip", "logical-focus-outside-popup", this, this.popupOwner, transientFocusGeneration, nativeWindowFocused)
+		}
 		this.dismissOwnedPopups()
 		if this.wt == WtPopup && this.widget != nil {
 			popups := map[IWidget]bool{this.widget: true}
-			clearPopupInput(popups, this.popupRestoreFocus, widgetWithinPopups(focusWidget, popups))
+			clearPopupInput(popups, focusTargetForOwner(this.popupOwner, this.popupRestoreFocus), widgetWithinPopups(focusWidget, popups))
 		}
 	}
 	if this.glfwWin == nil {
@@ -1189,9 +1199,10 @@ func (this *Window) setVisible(b bool) {
 		return
 	}
 	if b {
+		transientFocusGeneration++
 		this.refreshPopupOwner()
 		if this.wt == WtPopup && focusWidget != this.widget {
-			this.popupRestoreFocus = focusWidget
+			this.popupRestoreFocus = focusTargetForOwner(this.popupOwner, focusWidget)
 		}
 		if this.wt == WtPopup && this.hasPendingPos {
 			// ── Popup zero-flicker strategy ──
@@ -1244,14 +1255,17 @@ func (this *Window) setVisible(b bool) {
 		this.dirty = true
 		this.debugPopupState("show")
 	} else {
-		if this.wt == WtPopup {
-			unbindNativePopupOwner(this.glfwWin)
-		}
-		this.glfwWin.Hide()
+		duringTransientTeardown(func() {
+			if this.wt == WtPopup {
+				unbindNativePopupOwner(this.glfwWin)
+			}
+			this.glfwWin.Hide()
+		})
 		this.debugPopupState("hide")
 		if this.closeOnHide {
 			this.destroy()
 		}
+		focusReturn.queue()
 	}
 }
 
@@ -1345,7 +1359,7 @@ func (this *Window) dismissOwnedPopups() {
 			popup.Hide()
 		}
 	}
-	clearPopupInput(popups, restore, hadPopupFocus)
+	clearPopupInput(popups, focusTargetForOwner(this, restore), hadPopupFocus)
 }
 
 func clearPopupInput(popups map[IWidget]bool, restore IWidget, hadPopupFocus bool) {
@@ -1747,6 +1761,11 @@ func onWindowFocus(gw *glfw.Window, focused bool) {
 	win := winMap[gw]
 	if win == nil {
 		return
+	}
+	noteNativeFocusTransfer()
+	if core.IsDebugOn() {
+		core.Debug("focus-return native-event: window=", focusReturnWindowTag(win), ", focused=", focused,
+			", generation=", transientFocusGeneration, ", teardown-depth=", transientTeardownDepth)
 	}
 	if focused {
 		if win.wt == WtForm {
@@ -2522,6 +2541,8 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}
 
 	this.inModal = true
+	owner := this.ParentWindow()
+	restoreTarget := focusTargetForOwner(owner, focusWidget)
 
 	if this.wt == WtChild {
 		core.Warn("ShowModal on child window may cause confusion")
@@ -2551,11 +2572,13 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		this.inModal = false
 		retParam = this.modalRet
 		this.modalRet = nil
+		focusReturn := prepareTransientFocusReturn(this, owner, restoreTarget, nativeWindowFocused)
 
 		for pw := range enabledMap {
 			pw.SetEnabled(true)
 		}
 		this.Close()
+		focusReturn.queue()
 	}()
 
 	for this.inModal && !shouldQuit {

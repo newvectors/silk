@@ -1,6 +1,9 @@
 CAIRO_CFLAGS := $(shell pkg-config --cflags cairo 2>/dev/null)
 CAIRO_LDFLAGS := $(shell pkg-config --libs cairo 2>/dev/null)
 CGO_FLAGS := CGO_CFLAGS="$(CAIRO_CFLAGS)" CGO_LDFLAGS="$(CAIRO_LDFLAGS)"
+ifeq ($(OS),Windows_NT)
+IDE_EXE_SUFFIX := .exe
+endif
 
 .PHONY: all designer demo clean test install-deps example-calculator example-todo gen-resources run ide run-ide test-ide silkgen test-platform-scripts
 
@@ -8,17 +11,31 @@ all: gen-resources ide silkgen designer demo
 
 ide:
 	@mkdir -p bin
-	$(CGO_FLAGS) go build -o bin/silkide ./cmd/silkide
+	$(CGO_FLAGS) go build -o bin/silkide$(IDE_EXE_SUFFIX) ./cmd/silkide
+
+# Native Windows builds use MSYS2's existing resource compiler. The generated
+# architecture-specific .syso is ignored on other operating systems.
+ifeq ($(OS),Windows_NT)
+ide: cmd/silkide/rsrc_windows_amd64.syso
+cmd/silkide/rsrc_windows_amd64.syso: assets/branding/silkide.ico assets/branding/silkide.rc scripts/build-windows-icon.sh
+	bash scripts/build-windows-icon.sh
+endif
+
+.PHONY: bundle-ide
+bundle-ide: ide
+	@mkdir -p bin/icon
+	@cp -R icon/. bin/icon/
+	bash scripts/package-silkide-branding.sh "$$(go env GOOS)" bin
 
 silkgen:
 	@mkdir -p bin
 	$(CGO_FLAGS) go build -o bin/silkgen ./cmd/silkgen
 
 run-ide: ide
-	./bin/silkide
+	./bin/silkide$(IDE_EXE_SUFFIX)
 
 test-ide:
-	$(CGO_FLAGS) go test ./printing ./pdfexport ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
+	$(CGO_FLAGS) go test ./assets/branding ./printing ./pdfexport ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
 
 test-platform-scripts:
 	bash scripts/test-platform-scripts.sh
@@ -82,6 +99,7 @@ help:
 	@echo "  make designer           Build the visual designer"
 	@echo "  make demo               Build the widget demo"
 	@echo "  make ide                Build the integrated Go designer / IDE"
+	@echo "  make bundle-ide         Add macOS app or Linux desktop launcher assets"
 	@echo "  make silkgen            Build the Go form generator"
 	@echo "  make run-ide            Build and run the IDE"
 	@echo "  make test-ide           Run IDE, designer and UI regression tests"

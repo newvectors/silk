@@ -1,0 +1,2 @@
+// Windows Explorer/shortcut icon. Build with scripts/build-windows-icon.sh.
+1 ICON "silkide.ico"

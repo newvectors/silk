@@ -144,6 +144,8 @@ func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, o
 
 var appIcon paint.Icon
 
+// SetAppIcon opts a host into an explicit application icon before creating its
+// windows. Passing nil restores the executable-name lookup behavior.
 func SetAppIcon(icon paint.Icon) {
 	appIcon = icon
 }

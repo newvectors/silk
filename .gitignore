@@ -25,6 +25,7 @@ CLAUDE.md
 *.dylib
 *.test
 *.out
+cmd/silkide/rsrc_windows_*.syso
 
 # Environment & secrets
 .env

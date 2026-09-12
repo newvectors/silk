@@ -1218,7 +1218,11 @@ func emitDesignProperties(buf *strings.Builder, imports map[string]bool, factory
 			}
 			fmt.Fprintf(buf, "\tui.%s.%s(%d)\n", fieldName, p.setter, got.Int())
 		case dpString:
-			if got.String() == def.String() {
+			// Gantt's initial sample dates are relative to time.Now(). Even an
+			// untouched palette instance is a saved schedule, not a request to
+			// regenerate new dates whenever the compiled application starts.
+			keepSnapshot := factoryName == "gui.GanttChart" && p.getter == "TasksJSON"
+			if got.String() == def.String() && !keepSnapshot {
 				continue
 			}
 			fmt.Fprintf(buf, "\tui.%s.%s(%q)\n", fieldName, p.setter, got.String())

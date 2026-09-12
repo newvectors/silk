@@ -2,6 +2,13 @@
 
 #import <Cocoa/Cocoa.h>
 
+int silkApplicationActive(void) {
+    if (![NSThread isMainThread]) {
+        return -1;
+    }
+    return NSApp && [NSApp isActive] ? 1 : 0;
+}
+
 int silkBindPopupOwner(void *popupHandle, void *ownerHandle) {
     if (!popupHandle || !ownerHandle || ![NSThread isMainThread]) {
         return 0;

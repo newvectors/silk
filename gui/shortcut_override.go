@@ -10,8 +10,13 @@ type IShortcutOverride interface {
 
 func (win *Window) dispatchShortcutOverride(key int) bool {
 	target := win.keyTarget()
-	if target == nil || !target.IsEnabled() || !target.IsAllAncentorsVisible() {
+	if target == nil {
 		return false
+	}
+	for w := target; w != nil; w = w.Parent() {
+		if !w.IsEnabled() || !w.IsVisible() {
+			return false
+		}
 	}
 	if handler, ok := target.(IShortcutOverride); ok {
 		return handler.HandleShortcut(key, currentMods())
