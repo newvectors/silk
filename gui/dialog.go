@@ -239,15 +239,15 @@ func (this *Dialog) defaultButton() *Button {
 	return nil
 }
 
-// resolveDefault ends the modal with the default button's result, taking the
-// exact same path a click on that button takes (onBtnClick). Reports whether a
+// resolveDefault invokes the default button action, including custom validation
+// that may deliberately leave the dialog open. Reports whether a
 // default button was found. Exposed for headless testing of the Enter path.
 func (this *Dialog) resolveDefault() bool {
 	b := this.defaultButton()
 	if b == nil {
 		return false
 	}
-	this.onBtnClick(btnKey(b))
+	b.Action().Trigger(b)
 	return true
 }
 
@@ -263,6 +263,9 @@ func (this *Dialog) resolveCancel() {
 // (window_glfw dispatches to focusWidget first), so a focused multi-line editor
 // keeps its own Enter — the dialog only catches these as the focus fallback.
 func (this *Dialog) OnKeyDown(key int, repeat bool) {
+	if repeat {
+		return
+	}
 	switch key {
 	case KeyEnter:
 		this.resolveDefault()

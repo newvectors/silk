@@ -2,32 +2,67 @@ package gui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"time"
 )
 
+type cpuProfileSession struct {
+	mu    sync.Mutex
+	file  *os.File
+	start func(io.Writer) error
+	stop  func()
+}
+
+var cpuProfiler = cpuProfileSession{start: pprof.StartCPUProfile, stop: pprof.StopCPUProfile}
+
 // StartCPUProfile begins recording a Go pprof CPU profile to filename.
-// Call StopCPUProfile() to stop and flush the profile to disk. Calling
-// StartCPUProfile while a profile is already running returns an error from
-// runtime/pprof.
-func StartCPUProfile(filename string) error {
-	f, err := os.Create(filename)
+// Call StopCPUProfile to flush and close it. A repeated Start is rejected
+// before opening/truncating any file. Start/Stop are safe across goroutines.
+// Only one process-wide pprof CPU recorder can run at a time.
+func StartCPUProfile(filename string) error { return cpuProfiler.begin(filename) }
+
+func (s *cpuProfileSession) begin(filename string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil {
+		return fmt.Errorf("CPU profile already running")
+	}
+	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	if err := pprof.StartCPUProfile(f); err != nil {
+	if err := s.start(f); err != nil {
 		f.Close()
 		return err
 	}
+	s.file = f
 	return nil
 }
 
-// StopCPUProfile stops the current CPU profile and flushes any buffered data.
-// Safe to call when no profile is active (no-op).
+// StopCPUProfile flushes and closes the profile started by StartCPUProfile.
+// With no owned session it is a no-op (it does not stop another pprof owner).
 func StopCPUProfile() {
-	pprof.StopCPUProfile()
+	if err := cpuProfiler.finish(); err != nil {
+		fmt.Fprintf(os.Stderr, "silk CPU profile close: %v\n", err)
+	}
+}
+
+func (s *cpuProfileSession) finish() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return nil
+	}
+	// Keep ownership until pprof has joined its writer and the descriptor is
+	// closed; otherwise a concurrent Start could truncate a still-flushing file.
+	s.stop()
+	err := s.file.Close()
+	s.file = nil
+	return err
 }
 
 // WriteHeapProfile triggers a GC and writes the current heap profile to

@@ -101,6 +101,8 @@ type Window struct {
 	// the paint pass will use Cairo's clip rect to skip unchanged pixels.
 	dirtyRegion geom.Rect
 	fullDirty   bool
+	framePacer  framePacer
+	iconified   bool
 
 	// PBO (Pixel Buffer Object) state for async texture streaming. The PBO
 	// is sized to match the texture; uploadTextureViaPBO orphans + remaps
@@ -510,6 +512,13 @@ func (this *Window) paint() {
 	if this.widget == nil || this.glfwWin == nil {
 		return
 	}
+
+	started := time.Now()
+	defer func() {
+		now := time.Now()
+		this.framePacer.record(started, now)
+		glfwAnimationPacer.record(started, now)
+	}()
 
 	this.glfwWin.MakeContextCurrent()
 
@@ -1570,31 +1579,28 @@ func markAllWindowsDirty() {
 func serviceUIFrame() {
 	uiHeartbeat()
 	processTimers()
-
-	// Run tasks queued from background goroutines (dlv/LSP callbacks)
-	// on the main thread now that this frame's input + timers are done
-	// and before the paint pass, so GUI state is mutated safely.
 	drainUITasks()
-
-	// Advance the animation engine one frame. Progresses every active
-	// Animation/AnimationGroup off the wall clock and evicts finished
-	// ones, so HasActiveAnimations() drops back to false when nothing is
-	// running and the loop can return to the idle wait instead of
-	// spinning at 60fps.
-	AnimationTick()
+	now := time.Now()
+	if continuousFrameWanted() && glfwAnimationPacer.delay(now) == 0 && hasRenderableGLFWWindow() {
+		fullRepaint := animationsRequireFullRepaint()
+		pacerBefore := glfwAnimationPacer.finished
+		AnimationTick()
+		for _, win := range winMap {
+			if fullRepaint && win.canRenderFrame() {
+				win.Update()
+			}
+		}
+		glfwAnimationPacer.recordUnlessNestedPaint(pacerBefore, now, time.Now())
+	}
 }
 
 // MainLoop runs the GLFW event loop.
 //
-// Frame-pacing strategy:
-//   - SwapInterval(1) is enabled per-window in create(), so SwapBuffers blocks
-//     until the next display retrace. On ProMotion / 120Hz / 144Hz displays
-//     this adapts to the panel's actual refresh rate instead of a hard 60fps.
-//   - When the UI is idle (no animations, no live perf overlay) we use a long
-//     wait timeout so timers still fire (idle timer = 47ms) and the loop can
-//     react to off-thread wake-ups, but the CPU stays asleep most of the time.
-//   - When animations are running or the perf overlay is live we use the
-//     classic ~16ms tick so redraws happen smoothly.
+// Frames are driven by damage or continuous animation, with 25 FPS quiet /
+// 60 FPS interaction ceilings by default. The pacer reserves CPU headroom
+// after expensive frames. WaitEventsTimeout is interrupted by input/Post;
+// the rendering ceiling never throttles input delivery. Vsync is an additional
+// presentation limit, not the event-loop clock.
 func MainLoop() {
 	if err := nativeDesktopError("MainLoop"); err != nil {
 		// Outside the legacy event-loop recovery: callers must be able to
@@ -1615,45 +1621,21 @@ func MainLoop() {
 	}
 
 	for !shouldQuit {
-		// Tick rate selection. The 47ms idle-timer interval is the longest
-		// quiescent loop we can afford without breaking blinking cursors and
-		// hover-stop detection.
-		needsTick := GlobalPerfStats.IsVisible() || HasActiveAnimations()
-		if needsTick {
-			glfw.WaitEventsTimeout(1.0 / 60.0)
-		} else {
-			glfw.WaitEventsTimeout(0.047)
-		}
+		waitAdaptiveGLFWFrame()
 		flushNativeDestruction()
 		serviceUIFrame()
-
-		// Request a repaint every iteration while the perf overlay is live or
-		// any animation is running. Animations need the forced dirty because
-		// several drive their visuals straight off elapsed time with a no-op
-		// onUpdate (spinner / progressbar heartbeat) or only mutate widget
-		// pos/size (SlideIn/ScaleUp/Shake) without self-invalidating — without
-		// this they would tick but never redraw. When idle (no overlay, no
-		// animations) nothing is dirtied and the loop parks on the 47ms wait,
-		// so this never busy-spins the CPU.
-		if GlobalPerfStats.IsVisible() || HasActiveAnimations() {
-			for _, win := range winMap {
-				if win != nil && win.IsVisible() {
-					win.dirty = true
-				}
-			}
-		}
 
 		painted := false
 		// Repaint dirty windows: non-popup windows first, then popup windows.
 		// This ensures popups always render on top of the main window.
 		for _, win := range winMap {
-			if win.dirty && win.IsVisible() && win.wt != WtPopup {
+			if win.dirty && win.canRenderFrame() && win.framePacer.delay(time.Now()) == 0 && win.wt != WtPopup {
 				win.paint()
 				painted = true
 			}
 		}
 		for _, win := range winMap {
-			if win.dirty && win.IsVisible() && win.wt == WtPopup {
+			if win.dirty && win.canRenderFrame() && win.framePacer.delay(time.Now()) == 0 && win.wt == WtPopup {
 				win.paint()
 				painted = true
 			}
@@ -1746,6 +1728,12 @@ func onWindowMove(gw *glfw.Window, xpos, ypos int) {
 }
 
 func onWindowIconify(gw *glfw.Window, iconified bool) {
+	if win := winMap[gw]; win != nil {
+		win.iconified = iconified
+		if !iconified {
+			win.Update()
+		}
+	}
 	if win := winMap[gw]; win != nil && iconified {
 		win.dismissOwnedPopups()
 	}
@@ -1826,6 +1814,7 @@ func onWindowClose(gw *glfw.Window) {
 }
 
 func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
+	noteUIInteraction(time.Now())
 	previousMods := eventModifiers
 	eventModifiers = &mods
 	defer func() { eventModifiers = previousMods }()
@@ -2068,6 +2057,7 @@ func deliverCapturedMouseButton(capWin *Window, button glfw.MouseButton, action 
 }
 
 func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
+	noteUIInteraction(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			core.Warn("panic in onCursorPos: ", r)
@@ -2211,6 +2201,7 @@ func deliverCapturedMouseMove(capWidget IWidget, capWin *Window, winX, winY floa
 }
 
 func onScroll(gw *glfw.Window, xoff, yoff float64) {
+	noteUIInteraction(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			core.Warn("panic in onScroll: ", r)
@@ -2247,6 +2238,7 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 }
 
 func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
+	noteUIInteraction(time.Now())
 	previousMods := eventModifiers
 	eventModifiers = &mods
 	defer func() { eventModifiers = previousMods }()
@@ -2289,7 +2281,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	// would eat Cmd+Z for its own undo before the IDE's design-canvas
 	// undo could fire. dispatchShortcut returns true when the key was
 	// consumed by a registered shortcut.
-	if action == glfw.Press && dispatchShortcut(vk) {
+	if action == glfw.Press && (win.dispatchShortcutOverride(vk) || dispatchShortcut(vk)) {
 		return
 	}
 
@@ -2339,6 +2331,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 }
 
 func onChar(gw *glfw.Window, char rune) {
+	noteUIInteraction(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			core.Warn("panic in onChar: ", r)
@@ -2566,15 +2559,7 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}()
 
 	for this.inModal && !shouldQuit {
-		// Same wait strategy as MainLoop: short timeout when continuous
-		// redraw is needed, longer (47ms idle-timer interval) otherwise.
-		// SwapInterval(1) handles vsync.
-		needsTick := GlobalPerfStats.IsVisible() || HasActiveAnimations()
-		if needsTick {
-			glfw.WaitEventsTimeout(1.0 / 60.0)
-		} else {
-			glfw.WaitEventsTimeout(0.047)
-		}
+		waitAdaptiveGLFWFrame()
 		// Same per-iteration service work as MainLoop, for the same reasons: a
 		// modal dialog is an event loop like any other, so posted tasks must
 		// keep running and the watchdog must keep being fed while it is open,
@@ -2582,24 +2567,14 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		// freezes for the life of the dialog.
 		serviceUIFrame()
 
-		// Force a repaint only while animations run (an idle modal stays on the
-		// 47ms wait, so no CPU spin).
-		if HasActiveAnimations() {
-			for _, win := range winMap {
-				if win != nil && win.IsVisible() {
-					win.dirty = true
-				}
-			}
-		}
-
 		// Paint non-popup windows first, then popups on top
 		for _, win := range winMap {
-			if win.dirty && win.IsVisible() && win.wt != WtPopup {
+			if win.dirty && win.canRenderFrame() && win.framePacer.delay(time.Now()) == 0 && win.wt != WtPopup {
 				win.paint()
 			}
 		}
 		for _, win := range winMap {
-			if win.dirty && win.IsVisible() && win.wt == WtPopup {
+			if win.dirty && win.canRenderFrame() && win.framePacer.delay(time.Now()) == 0 && win.wt == WtPopup {
 				win.paint()
 			}
 		}

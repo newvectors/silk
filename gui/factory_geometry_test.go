@@ -413,7 +413,7 @@ func TestFactorySpinnerDrawsAndCanBeArmed(t *testing.T) {
 	// Attached first: an unparented spinner cannot be on screen, and arming
 	// one is the leak that pinned the loop at 40-63 repaints/s (see
 	// spinner_idle_test.go). SetBusy alone is not enough, and must not be.
-	host := NewVBox()
+	host := newBusyAnimationTestHost(t)
 	sp.SetParent(host)
 	sp.SetBusy(true)
 	if sp.anim == nil || sp.anim.State() != AnimRunning {

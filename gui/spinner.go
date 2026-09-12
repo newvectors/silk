@@ -74,7 +74,7 @@ func NewSpinner() *Spinner {
 // starts !busy draws nothing at all. Arming the heartbeat does not: Init runs
 // for every reflect-built widget, including throwaway instances the designer
 // never shows, and each startAnim would leave a looping Animation behind. The
-// heartbeat is started by NewSpinner and by SetBusy(true) instead.
+// heartbeat is started only when attached to a visible window tree.
 func (this *Spinner) Init(self IWidget) {
 	this.Widget.Init(self)
 	this.color = Theme().HighLightColor
@@ -193,23 +193,19 @@ func (this *Spinner) OnHide() {
 	this.Self().Update()
 }
 
-// canDrive reports whether this spinner is in a position to be seen:
-// busy, attached to a tree, and not hidden itself. Only such a spinner
-// may hold the loop at the animation tick.
-//
-// Deliberately NOT gated on ancestor visibility. Widget.setVisible
-// dispatches OnShow/OnHide to the widget it was called on and never to
-// descendants, so a spinner attached under a hidden ancestor would answer
-// "no" here and never be re-asked -- StackedWidget.AddPage hides the page
-// it just took, so the ordinary "add the page, then fill it" order left a
-// tab's loading spinner painted but frozen forever. The hidden-spinner
-// case that costs a core (68% measured) is spinner.Hide(), which
-// IsVisible() plus the OnHide seam already catches. Gating on ancestors
-// needs a real propagation seam in Widget.setVisible; until that exists,
-// a leak while an ancestor is hidden beats a spinner that never turns.
+// canDrive requires a visible, window-attached ancestor chain. Widget's
+// opt-in visibility notification rearms on ancestor Show/reparent/attach,
+// so hidden pages no longer need a leaking heartbeat to animate later.
 func (this *Spinner) canDrive() bool {
-	self := this.Self()
-	return this.busy && self.Parent() != nil && self.IsVisible()
+	return this.busy && busyAnimationVisible(this.Self())
+}
+
+func (this *Spinner) syncBusyAnimationVisibility() {
+	before := this.anim
+	this.syncAnim()
+	if before != this.anim {
+		this.Self().Update()
+	}
 }
 
 // syncAnim makes the heartbeat match canDrive(). Every seam that can
@@ -233,6 +229,8 @@ func (this *Spinner) startAnim() {
 		return
 	}
 	this.anim = NewAnimation(0, 1, this.cycle).SetLoop(true).SetEase(EaseLinear)
+	this.anim.updatesOwnRegion = true
+	this.anim.OnUpdate(func(float64) { this.Self().Update() })
 	this.anim.Start()
 }
 

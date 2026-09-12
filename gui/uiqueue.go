@@ -22,10 +22,11 @@ func Post(fn func()) {
 		return
 	}
 	uiTaskMu.Lock()
+	wasEmpty := len(uiTasks) == 0
 	uiTasks = append(uiTasks, fn)
 	wake := uiWakeupFn
 	uiTaskMu.Unlock()
-	if wake != nil {
+	if wasEmpty && wake != nil {
 		wake() // nudge a blocked WaitEvents so the task runs promptly
 	}
 }
@@ -61,5 +62,14 @@ func runUITask(fn func()) {
 	fn()
 }
 
-// SetUIWakeup installs the wakeup hook (called once by the window layer).
-func SetUIWakeup(fn func()) { uiTaskMu.Lock(); uiWakeupFn = fn; uiTaskMu.Unlock() }
+// SetUIWakeup installs the backend hook. Tasks posted before a hook exists
+// still need a wakeup when one is installed; do not wait for another Post.
+func SetUIWakeup(fn func()) {
+	uiTaskMu.Lock()
+	uiWakeupFn = fn
+	pending := len(uiTasks) != 0
+	uiTaskMu.Unlock()
+	if pending && fn != nil {
+		fn()
+	}
+}

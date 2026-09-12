@@ -414,11 +414,17 @@ func registerSilkideTranslations() {
 		"Opened %s":                       "已打开 %s",
 		"Recovered from autosave":         "已从自动保存恢复",
 		"Exported to %s":                  "已导出到 %s",
-		"Export failed":                   "导出失败",
-		"main.go":                         "main.go",
-		"server.go":                       "server.go",
-		"go.mod":                          "go.mod",
-		"untitled":                        "未命名",
+		"Print Design...":                 "打印设计...",
+		"Switch to Design mode to print":  "请切换到设计模式后打印",
+		"Cannot print a design with missing widgets":                   "设计存在缺失控件，不能打印",
+		"Print backend accepted the document; check the printer queue": "打印后端已接收文档，请检查打印队列",
+		"Print job queued: %s":                                         "打印任务已入队：%s",
+		"Printing could not complete":                                  "打印未完成",
+		"Export failed":                                                "导出失败",
+		"main.go":                                                      "main.go",
+		"server.go":                                                    "server.go",
+		"go.mod":                                                       "go.mod",
+		"untitled":                                                     "未命名",
 		// Status-bar message templates. i18n.Tf passes the format args
 		// through unchanged, so the "%s" / "%d" placeholders translate
 		// 1-for-1 from English to Chinese.

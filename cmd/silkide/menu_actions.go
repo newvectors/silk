@@ -147,6 +147,7 @@ func buildHamburgerMenu(anchor *gui.Button, tabs *gui.TabWidget, canvas *ged.Ged
 	appendFileMenuCommand(m, fileMenuCommand{"file.save", "Save", "save", key + "+S", func() { saveCurrentDocument(tabs, canvas) }, canSave})
 	appendFileMenuCommand(m, fileMenuCommand{"file.saveAll", "Save All", "save", key + "+Shift+S", func() { performSaveAll(tabs, canvas) }, canvas != nil || activeEditor(tabs) != nil})
 	appendFileMenuCommand(m, fileMenuCommand{"file.export", "Export...", "document", "", func() { performExport(canvas) }, canvas != nil})
+	appendFileMenuCommand(m, fileMenuCommand{"file.print", "Print Design...", "printer", "", func() { performPrintDesign(canvas) }, canPrintDesign(canvas)})
 	m.AddSeparator()
 	appendFileMenuCommand(m, fileMenuCommand{"tools.a11y", "Dump A11y Tree", "tree-view", key + "+Shift+A", dumpA11yTree, true})
 	appendFileMenuCommand(m, fileMenuCommand{"project.settings", "Project Settings", "propsheet", "", func() { showProjectSettingsDialog(canvas) }, true})

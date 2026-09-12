@@ -231,6 +231,7 @@ func (this *Widget) SetParent(parent IWidget) {
 		this.parent = np
 	}
 	this.syncWindow(this.IsVisible(), true)
+	notifyBusyAnimationVisibility(this.Self())
 }
 
 func (this *Widget) X() float64 {
@@ -427,10 +428,21 @@ func (this *Widget) Update() {
 }
 
 func (this *Widget) UpdateRect(x, y, width, height float64) {
+	assertUIThread("Widget.UpdateRect")
+	this.invalidateRectInWindow(x, y, width, height, (*Window).UpdateRect)
+}
+
+// Keep the logical rectangle unchanged while walking local ancestor origins.
+// The injected sink also permits geometry regression tests without a native
+// window; production always passes the backend's actual invalidation method.
+func (this *Widget) invalidateRectInWindow(x, y, width, height float64, invalidate func(*Window, float64, float64, float64, float64)) {
+	if width <= 0 || height <= 0 {
+		return
+	}
 	for p := this.Self(); p != nil; p = p.Parent() {
 		win := p.Window()
 		if win != nil {
-			win.UpdateRect(x, y, this.w, this.h)
+			invalidate(win, x, y, width, height)
 			return
 		}
 		x1, y1, _, _ := p.Bounds()
@@ -722,6 +734,7 @@ func (this *Widget) setVisible(b bool) {
 			i.OnShow()
 		}
 	}
+	notifyBusyAnimationVisibility(this.Self())
 }
 
 func (this *Widget) Show() {
@@ -739,6 +752,12 @@ func (this *Widget) Hide() {
 //}
 
 func (this *Widget) syncWindow(visible, lazy bool) {
+	previous := this.win
+	defer func() {
+		if previous != this.win {
+			notifyBusyAnimationVisibility(this.Self())
+		}
+	}()
 	if this.win != nil && this.wt != this.win.wt {
 		w := this.win
 		this.win = nil

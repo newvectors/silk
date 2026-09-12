@@ -439,6 +439,10 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 		shortName = factoryName[idx+1:]
 	}
 	switch strings.ToLower(shortName) {
+	case "ganttchart":
+		return 180, 95
+	case "printbutton":
+		return 32, 9
 	case "button":
 		return 25, 7
 	case "label":

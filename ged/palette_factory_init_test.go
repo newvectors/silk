@@ -51,6 +51,11 @@ func dropOnCanvas(t *testing.T, name string) {
 
 	view := NewGedView()
 	scene := view.GedScene()
+	// The palette now includes large timeline controls. Exercise creation on
+	// a form large enough for each default; oversized-drop rejection is tested
+	// separately by the drop-plan tests, not a factory initialization failure.
+	width, height := defaultSizeForWidget(name)
+	scene.SetSize(max(scene.Width(), width+20), max(scene.Height(), height+20))
 
 	ctx := &dropCtx{pa: gui.DndCopy, payload: name}
 	ctx.SetAction(gui.DndIgnore)

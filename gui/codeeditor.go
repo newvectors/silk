@@ -224,15 +224,24 @@ const (
 type CodeEditor struct {
 	savedText string
 	Widget
-	text       string
-	lines      []string
-	scrollY    float64
-	scrollX    float64
-	cursorLine int
-	cursorCol  int
-	font       paint.Font
-	lineHeight float64
-	gutterW    float64
+	// Text and its derived metadata are refreshed at the edit boundary, never
+	// by idle title polling or painting. Low-level splice helpers mark dirty
+	// until rebuildText publishes the edit (or a direct Text read needs it).
+	textDirty        bool
+	textRevision     uint64
+	textRuneCount    int
+	modifiedRevision uint64
+	modified         bool
+	symbolCache      codeSymbolCache
+	text             string
+	lines            []string
+	scrollY          float64
+	scrollX          float64
+	cursorLine       int
+	cursorCol        int
+	font             paint.Font
+	lineHeight       float64
+	gutterW          float64
 
 	// inBlockComment tracks whether we are inside a multi-line /* */ comment
 	// at the start of each visible rendering pass.
@@ -496,8 +505,8 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.Widget.Init(iw)
 	this.font = paint.NewFont("Menlo", 13, false, false)
 	this.gutterW = 50
-	this.text = ""
 	this.lines = []string{""}
+	this.cacheText("")
 	this.cursorLine = 0
 	this.cursorCol = 0
 	this.findBarHeight = codeEditorFindRowHeight
@@ -617,11 +626,11 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 
 // SetText replaces the entire editor content.
 func (this *CodeEditor) SetText(s string) {
-	this.text = s
 	this.lines = strings.Split(s, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
 	}
+	this.cacheText(s)
 	this.cursorLine = 0
 	this.cursorCol = 0
 	this.scrollY = 0
@@ -637,9 +646,32 @@ func (this *CodeEditor) SetText(s string) {
 	this.Self().Update()
 }
 
-// Text returns the full editor content.
+// Text returns the full editor content. Unchanged reads reuse the immutable
+// cached string; they do not concatenate the document again.
 func (this *CodeEditor) Text() string {
-	return strings.Join(this.lines, "\n")
+	if this.textDirty {
+		this.cacheText(strings.Join(this.lines, "\n"))
+	}
+	return this.text
+}
+
+// TextRevision changes whenever the buffer content changes, including SetText,
+// undo and redo. Cursor, selection, save markers and identical text do not
+// change it. It is an invalidation token, not an undo position or a dirty flag.
+func (this *CodeEditor) TextRevision() uint64 {
+	this.Text()
+	return this.textRevision
+}
+
+// cacheText publishes a complete buffer without emitting edit notifications.
+// Keep the old string on equality so no-op edits preserve the cached storage.
+func (this *CodeEditor) cacheText(text string) {
+	if text != this.text {
+		this.text = text
+		this.textRevision++
+		this.textRuneCount = utf8.RuneCountInString(text)
+	}
+	this.textDirty = false
 }
 
 // ReplaceAllText swaps the whole buffer for s while PRESERVING undo history,
@@ -648,7 +680,7 @@ func (this *CodeEditor) Text() string {
 // change. Records one kind-3 (full-text-replace) undo entry, fires SigChanged
 // so the host re-syncs gopls, and no-ops when s equals the current text.
 func (this *CodeEditor) ReplaceAllText(s string) {
-	oldFull := strings.Join(this.lines, "\n")
+	oldFull := this.Text()
 	if s == oldFull {
 		return
 	}
@@ -873,9 +905,11 @@ func (this *CodeEditor) CaretGlobalXY() (float64, float64) {
 	return this.MapToGlobal(this.caretLocalXY())
 }
 
-// Lines returns the current editor lines.
+// Lines returns an independent snapshot of the current editor lines. Mutating
+// the returned slice does not edit the buffer; use SetText, ReplaceAllText or
+// the editing methods so revision tracking, rendering and undo stay in sync.
 func (this *CodeEditor) Lines() []string {
-	return this.lines
+	return append([]string(nil), this.lines...)
 }
 
 // SigWidgetClicked registers a callback for widget-name clicks.
@@ -1521,6 +1555,7 @@ func (this *CodeEditor) insertAtAllCursors(text string) {
 	if len(insertRunes) == 0 {
 		return
 	}
+	this.textDirty = true
 	// Gather all cursor positions (primary + additional) sorted descending so
 	// we can mutate lines without invalidating earlier positions.
 	all := this.allCursors()
@@ -1569,6 +1604,7 @@ func (this *CodeEditor) insertAtAllCursors(text string) {
 // at column 0 and line 0 do nothing. Otherwise the cursor moves back one
 // column (or joins the previous line if col == 0). Processed back-to-front.
 func (this *CodeEditor) backspaceAtAllCursors() {
+	this.textDirty = true
 	all := this.allCursors()
 	// Process descending so edits don't invalidate earlier positions.
 	sort.Slice(all, func(i, j int) bool {
@@ -1637,6 +1673,7 @@ func (this *CodeEditor) backspaceAtAllCursors() {
 
 // deleteAtAllCursors applies forward-delete at every cursor position.
 func (this *CodeEditor) deleteAtAllCursors() {
+	this.textDirty = true
 	all := this.allCursors()
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].line != all[j].line {
@@ -1802,7 +1839,7 @@ func (this *CodeEditor) selectNextOccurrence() {
 //     tokenizeLineCached detects the byte change and recomputes that
 //     single entry on its next Draw.
 func (this *CodeEditor) rebuildText() {
-	this.text = strings.Join(this.lines, "\n")
+	this.cacheText(strings.Join(this.lines, "\n"))
 	if len(this.lines) != this.tokenCacheLineCt {
 		this.clearTokenCache()
 		this.tokenCacheLineCt = len(this.lines)
@@ -1917,6 +1954,7 @@ func (this *CodeEditor) ReplaceSelection(text string) {
 		} else {
 			this.insertMultilineAtCursor(pasteLines)
 		}
+		this.rebuildText()
 	}
 }
 
@@ -2053,6 +2091,7 @@ func (this *CodeEditor) redo() {
 
 // insertRawText inserts text at current cursor without recording undo.
 func (this *CodeEditor) insertRawText(text string) {
+	this.textDirty = true
 	insertLines := strings.Split(text, "\n")
 	if len(insertLines) == 1 {
 		line := this.lines[this.cursorLine]
@@ -2071,6 +2110,7 @@ func (this *CodeEditor) insertRawText(text string) {
 
 // deleteRange deletes count runes starting at (line, col), possibly across lines.
 func (this *CodeEditor) deleteRange(line, col, count int) {
+	this.textDirty = true
 	for count > 0 && line < len(this.lines) {
 		runes := []rune(this.lines[line])
 		avail := len(runes) - col
@@ -2094,6 +2134,7 @@ func (this *CodeEditor) deleteRange(line, col, count int) {
 
 // insertTextAtCursor inserts single-line text at cursor, no undo recording.
 func (this *CodeEditor) insertTextAtCursor(text string) {
+	this.textDirty = true
 	line := this.lines[this.cursorLine]
 	runes := []rune(line)
 	insertRunes := []rune(text)
@@ -2107,6 +2148,7 @@ func (this *CodeEditor) insertTextAtCursor(text string) {
 
 // insertMultilineAtCursor inserts multiple lines at cursor.
 func (this *CodeEditor) insertMultilineAtCursor(pasteLines []string) {
+	this.textDirty = true
 	line := this.lines[this.cursorLine]
 	runes := []rune(line)
 	before := string(runes[:this.cursorCol])
@@ -2345,7 +2387,7 @@ func (this *CodeEditor) replaceAll() int {
 	if this.findText == "" {
 		return 0
 	}
-	oldFullText := strings.Join(this.lines, "\n")
+	oldFullText := this.Text()
 	newFullText, n := replaceAllInText(oldFullText, this.findText, this.replaceText, false)
 	if n == 0 || oldFullText == newFullText {
 		return n
@@ -2646,7 +2688,7 @@ func (this *CodeEditor) JoinLines() {
 	if to >= len(this.lines) {
 		return
 	}
-	oldFull := strings.Join(this.lines, "\n")
+	oldFull := this.Text()
 	caretCol := len([]rune(strings.TrimRight(this.lines[from], " \t")))
 	newLines := joinLinesInText(this.lines, from, to)
 	newFull := strings.Join(newLines, "\n")
@@ -2678,7 +2720,7 @@ func trimTrailingInText(text string) string {
 // column is clamped to its (possibly shorter) line. Callable by the host and
 // recorded as one undoable full-text edit routed through rebuildText.
 func (this *CodeEditor) TrimTrailingWhitespace() {
-	oldFull := strings.Join(this.lines, "\n")
+	oldFull := this.Text()
 	newFull := trimTrailingInText(oldFull)
 	if newFull == oldFull {
 		return
@@ -2733,7 +2775,7 @@ func (this *CodeEditor) DuplicateLines() {
 		return
 	}
 	sl, sc, el, ec := this.selectionRange()
-	oldFull := strings.Join(this.lines, "\n")
+	oldFull := this.Text()
 	newLines := duplicateLinesInText(this.lines, sl, el)
 	newFull := strings.Join(newLines, "\n")
 	this.pushUndo(editAction{kind: 3, line: this.cursorLine, col: this.cursorCol, text: newFull, oldText: oldFull})
@@ -3970,7 +4012,8 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	g.DrawText1(10, textY, lnCol)
 
 	// Character count / Line count
-	charCount := len([]rune(this.text))
+	this.Text() // also covers an unpublished low-level splice
+	charCount := this.textRuneCount
 	lineCount := len(this.lines)
 	countStr := fmt.Sprintf("%d chars, %d lines", charCount, lineCount)
 	lnColExt := smallFont.TextExtents(lnCol)
@@ -6412,23 +6455,16 @@ func isTestFuncWithPrefix(name, prefix string) bool {
 
 // testFuncLines returns a map of 0-based line index -> test-func name for every
 // top-level test function in the buffer, but ONLY when the edited file is a
-// *_test.go. For any other file it returns nil (no allocation), keeping the draw
-// hot path free of work in the common case. ParseSymbols is the same O(lines)
-// scan the breadcrumb already runs every frame, so recomputing here is cheap.
+// *_test.go. The map is a package-private, read-only view of the symbol cache;
+// callers must not mutate it. Both the parsed declarations and this projection
+// are built once per content revision, not once per frame. Filename gating is
+// checked independently so renaming a file never leaves stale gutter markers.
 func (this *CodeEditor) testFuncLines() map[int]string {
 	if !strings.HasSuffix(this.FilePath(), "_test.go") {
 		return nil
 	}
-	var out map[int]string
-	for _, s := range this.ParseSymbols() {
-		if s.Kind == SymFunc && isGoTestFuncName(s.Name) {
-			if out == nil {
-				out = make(map[int]string)
-			}
-			out[s.Line] = s.Name
-		}
-	}
-	return out
+	this.cachedSymbols()
+	return this.symbolCache.testLines
 }
 
 // testRunMarkerHitX reports whether a gutter x-coordinate falls inside the run ▶

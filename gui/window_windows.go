@@ -84,14 +84,17 @@ var (
 )
 
 type Window struct {
-	hWnd        win32.HWND
-	backPainter paint.Painter
-	backBuffer  paint.Pixmap
-	backWidth   int
-	backHeight  int
-	widget      IWidget
-	wt          WindowType
-	title       string
+	hWnd                                                          win32.HWND
+	backPainter                                                   paint.Painter
+	backBuffer                                                    paint.Pixmap
+	backWidth                                                     int
+	backHeight                                                    int
+	framePacer                                                    framePacer
+	repaintPending, repaintFull, paintQueued, painting, minimized bool
+	repaintRect                                                   geom.Rect
+	widget                                                        IWidget
+	wt                                                            WindowType
+	title                                                         string
 	//	staticTitle  bool
 	autoCaptured           bool
 	toCapture              bool
@@ -157,46 +160,14 @@ func init() {
 	core.SetMainLoop(MainLoop, QuitLoop)
 }
 
-// serviceUIFrame runs the per-iteration work the GLFW loop does after input:
-// tasks queued from background goroutines (gui.Post — LSP, dlv, build output,
-// SCADA tag updates) and the animation engine. The Win32 pump used to do
-// neither, so on Windows a posted task was queued forever and animations never
-// advanced. The 47ms idle timer (SetTimer → WM_TIMER) keeps the pump turning
-// while the user is idle, which matches the GLFW backend's 47ms idle wait; the
-// WM_UI_WAKEUP hook installed in init() makes a posted task run immediately
-// rather than at the timer's mercy.
+// Every dispatched message may drain UI tasks and arm an earlier paint
+// deadline, but only the one-shot render timer advances animations. In
+// particular, finishing a slow WM_PAINT cannot immediately trigger another.
 func serviceUIFrame() {
 	uiHeartbeat()
 	drainUITasks()
-
-	// Rate-limit the animation work to ~60fps. This runs after EVERY dispatched
-	// message, and a moving mouse alone delivers hundreds per second — ticking
-	// and invalidating on each one pegged the CPU repainting the whole designer
-	// far faster than anyone can see. The GLFW backend gets this for free
-	// because its loop begins with WaitEventsTimeout(1/60).
-	now := time.Now()
-	if now.Sub(lastAnimFrame) < animFrameInterval {
-		return
-	}
-	lastAnimFrame = now
-
-	AnimationTick()
-	if HasActiveAnimations() {
-		// Animations that only mutate geometry (SlideIn/ScaleUp/Shake) or run
-		// off elapsed time do not self-invalidate; nudge every visible window
-		// so the frame actually reaches the screen.
-		for _, win := range winMap {
-			if win != nil && win.IsVisible() {
-				win.Update()
-			}
-		}
-	}
+	scheduleRenderFrame()
 }
-
-// Animation pacing for the Win32 pump. UI-thread only, so plain variables.
-const animFrameInterval = time.Second / 60
-
-var lastAnimFrame time.Time
 
 // wndProc panic reporting state. UI-thread only.
 var (
@@ -699,7 +670,11 @@ func (this *Window) SetSize(w, h float64) {
 }
 
 func (win *Window) on_WM_SIZE(msg uint32, wParam, lParam uintptr) (ret uintptr) {
-	if wParam == win32.SIZE_MINIMIZED {
+	win.paintQueued = false
+	win.minimized = wParam == win32.SIZE_MINIMIZED
+	if win.minimized {
+		win.paintQueued = false
+		scheduleRenderFrame()
 		win.dismissOwnedPopups()
 		return 0
 	}
@@ -710,6 +685,7 @@ func (win *Window) on_WM_SIZE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 		win.dismissOwnedPopups()
 	}
 	win.widget.NakedWidget().setSize(w, h)
+	win.Update()
 	return 0
 }
 
@@ -745,19 +721,11 @@ func (win *Window) on_WM_MOVE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 }
 
 func (this *Window) Update() {
-	if this.hWnd == 0 {
-		return
-	}
-	win32.InvalidateRect(this.hWnd, nil, false)
+	this.requestRepaint(geom.Rect{}, true)
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {
-	if this.hWnd == 0 {
-		return
-	}
-	//core.MoreDebug(x, y, width, height)
-	rect := &win32.RECT{int32(x), int32(y), int32(x + width), int32(y + height)}
-	win32.InvalidateRect(this.hWnd, rect, false)
+	this.requestRepaint(geom.Rect{X: x, Y: y, Width: width, Height: height}, false)
 }
 
 func (this *Window) mapFromGlobal(x, y float64) (x1, y1 float64) {
@@ -1219,6 +1187,10 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	}
 
+	// Input is dispatched immediately; only its resulting paint is paced.
+	if (msg >= win32.WM_KEYFIRST && msg <= win32.WM_KEYLAST) || (msg >= win32.WM_MOUSEFIRST && msg <= win32.WM_MOUSELAST) {
+		noteUIInteraction(time.Now())
+	}
 	switch msg {
 	case win32.WM_KEYDOWN:
 		// The window-level key layer existed only in the GLFW backend, so on
@@ -1230,7 +1202,7 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		if win.dispatchEscape(int(wParam), repeat) {
 			return 0
 		}
-		if !repeat && dispatchShortcut(int(wParam)) {
+		if !repeat && (win.dispatchShortcutOverride(int(wParam)) || dispatchShortcut(int(wParam))) {
 			return 0
 		}
 		if wParam == win32.VK_TAB && win.widget != nil {
@@ -1352,37 +1324,62 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	paintStruct := win32.PAINTSTRUCT{}
 	win32.BeginPaint(win.hWnd, &paintStruct)
-	winSurface := paint.NewWin32Surface(uintptr(paintStruct.Hdc))
-	//if win.DoubleBuffered() {
-	width, height := win.widget.Size()
-	backPainter, backBuffer := win.getBackBuffer(winSurface, int(width), int(height))
-
-	backPainter.Save()
+	// Validate the native update region even if a Cairo/widget callback panics.
+	// Otherwise WM_PAINT repeats forever on the same invalid region.
+	defer win32.EndPaint(win.hWnd, &paintStruct)
+	start := time.Now()
+	win.painting = true
+	win.paintQueued = false
+	// Requests not yet submitted (including requests made DURING Draw) remain
+	// pending for the next paced frame, independent of this native update region.
+	defer win.finishScheduledPaint(start)
+	if paintStruct.Hdc == 0 || win.minimized {
+		return 0
+	}
 	rc := paintStruct.RcPaint
-	DrawWidgetAll(win.widget, backPainter,
-		0, 0, float64(rc.Left), float64(rc.Top),
-		float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
+	if rc.Right <= rc.Left || rc.Bottom <= rc.Top {
+		return 0
+	}
+	winSurface := paint.NewWin32Surface(uintptr(paintStruct.Hdc))
+	defer winSurface.Finish()
+	width, height := win.widget.Size()
+	fresh := win.backBuffer == nil || (int(width)+15)/16*16 != win.backWidth || (int(height)+15)/16*16 != win.backHeight
+	backPainter, backBuffer := win.getBackBuffer(winSurface, int(width), int(height))
+	backPainter.RestoreTo(0)
+	backPainter.ResetClip()
+	backPainter.ResetMatrix()
+	backPainter.SetPen(paint.NewPen(paint.Color{0, 0, 0, 255}, 1))
+	backPainter.SetBrush(nil)
+	backPainter.Save()
+	if fresh {
+		DrawWidgetAll(win.widget, backPainter, 0, 0, 0, 0, width, height)
+	} else {
+		DrawWidgetAll(win.widget, backPainter, 0, 0, float64(rc.Left), float64(rc.Top), float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
+	}
+	if GlobalPerfStats.IsVisible() {
+		GlobalPerfStats.SetWidgetCount(CountWidgets(win.widget))
+		GlobalPerfStats.Draw(backPainter, width, height)
+	}
 	backPainter.Restore()
 	backBuffer.Flush()
-
 	c := winSurface.NewPainter()
-	//	c.SetSourceSurface(backBuffer, 0, 0)
-	c.Rectangle(float64(rc.Left), float64(rc.Top),
-		float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
+	c.Rectangle(float64(rc.Left), float64(rc.Top), float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
 	c.Clip()
-	//c.Paint()
 	c.DrawPixmap(backBuffer)
-
-	winSurface.Finish()
-	win32.EndPaint(win.hWnd, &paintStruct)
 	return 0
 }
 func (win *Window) on_WM_SHOWWINDOW(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	win.paintQueued = false
 	visible := wParam != 0
 	if !visible {
 		win.dismissOwnedPopups()
 	}
 	win.widget.(iWidget).setVisible(visible)
+	if visible {
+		win.Update()
+	} else {
+		scheduleRenderFrame()
+	}
 	if !visible && win.closeOnHide {
 		win.Close()
 		return 0
@@ -1738,10 +1735,8 @@ func ShowConsoleWindow() {
 // so we invalidate every known window. This is used by the F12 perf overlay
 // toggle.
 func markAllWindowsDirty() {
-	for hWnd := range winMap {
-		if hWnd != 0 {
-			win32.InvalidateRect(hWnd, nil, false)
-		}
+	for _, win := range winMap {
+		win.Update()
 	}
 }
 
@@ -1773,7 +1768,12 @@ func MainLoop() {
 
 	msg := win32.MSG{}
 	for {
-		if !win32.GetMessage(&msg, 0, 0, 0) || msg.Message == win32.WM_QUIT {
+		ok, err := win32.GetMessageResult(&msg, 0, 0, 0)
+		if err != nil {
+			core.Warn("GetMessage failed; stopping UI loop: ", err)
+			break
+		}
+		if !ok || msg.Message == win32.WM_QUIT {
 			break
 		}
 
@@ -1961,31 +1961,31 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	// TODO: 应该过滤掉所有其他窗口的鼠标/键盘消息
 
 	msg := win32.MSG{}
-	for {
-		if !win32.PeekMessage(&msg, 0, 0, 0, win32.PM_REMOVE) {
-			win32.Sleep(1)
-			continue
-		}
-
-		if msg.Message == win32.WM_QUIT {
-			win32.PostQuitMessage(int(msg.WParam))
-			break
-		}
-
-		if msg.Message == WM_END_MODAL {
-			break
-		}
-
-		if msg.Hwnd == 0 {
-			handleNonUIMessages(msg.Message, msg.WParam, msg.LParam)
-		} else {
-			win32.TranslateMessage(&msg)
-			win32.DispatchMessage(&msg)
-		}
-		// A modal dialog must keep servicing posted tasks and animations too,
-		// otherwise everything queued while it is open stalls until it closes.
-		serviceUIFrame()
-	}
+	pumpBlockingModalMessages(uintptr(this.hWnd), WM_END_MODAL, win32.WM_QUIT, modalPumpOps{
+		next: func() (modalPumpMessage, bool) {
+			// GetMessage sleeps until input, a timer, gui.Post's thread wakeup,
+			// EndModal or WM_QUIT arrives. No 1 ms PeekMessage/Sleep polling.
+			ok, err := win32.GetMessageResult(&msg, 0, 0, 0)
+			if err != nil {
+				core.Warn("GetMessage failed; stopping modal loop: ", err)
+				return modalPumpMessage{}, false
+			}
+			return modalPumpMessage{uintptr(msg.Hwnd), msg.Message, msg.WParam, msg.LParam}, ok
+		},
+		dispatch: func() {
+			if msg.Hwnd == 0 {
+				handleNonUIMessages(msg.Message, msg.WParam, msg.LParam)
+			} else {
+				win32.TranslateMessage(&msg)
+				win32.DispatchMessage(&msg)
+			}
+		},
+		service: serviceUIFrame,
+		repost: func(m modalPumpMessage) {
+			win32.PostMessage(win32.HWND(m.window), m.id, m.wParam, m.lParam)
+		},
+		quit: win32.PostQuitMessage,
+	})
 	return
 }
 

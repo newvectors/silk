@@ -18,7 +18,7 @@ run-ide: ide
 	./bin/silkide
 
 test-ide:
-	$(CGO_FLAGS) go test ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
+	$(CGO_FLAGS) go test ./printing ./pdfexport ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
 
 test-platform-scripts:
 	bash scripts/test-platform-scripts.sh

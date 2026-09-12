@@ -50,6 +50,8 @@ func main() {
 	// quit normally — core.init() creates the lock and only core.Close()
 	// removes it.
 	defer core.Close()
+	stopPerformanceCapture := startPerformanceCapture()
+	defer stopPerformanceCapture()
 	installLocale()
 	// Dark theme by default: the editor and bottom panels already render
 	// dark, so a dark shell unifies the IDE (VS Code / JetBrains style)

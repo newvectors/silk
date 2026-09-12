@@ -141,16 +141,6 @@ func (win *Window) queuePopupFocusCheck() {
 	})
 }
 
-// Preserve the same API as GLFW. Win32's normal invalidation already clips
-// the paint region; a conservative full redraw is correct for overlays too.
-func (win *Window) MarkDirtyRect(x, y, width, height float64) {
-	if width > 0 && height > 0 {
-		win.MarkFullDirty()
-	}
-}
-
-func (win *Window) MarkFullDirty() {
-	if win.hWnd != 0 {
-		win32.InvalidateRect(win.hWnd, nil, false)
-	}
-}
+// Explicit partial invalidation shares the same coalesced, paced damage path.
+func (win *Window) MarkDirtyRect(x, y, width, height float64) { win.UpdateRect(x, y, width, height) }
+func (win *Window) MarkFullDirty()                            { win.Update() }

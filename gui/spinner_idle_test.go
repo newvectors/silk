@@ -60,7 +60,7 @@ func TestSpinnerHiddenDoesNotDriveLoop(t *testing.T) {
 	spinnerIsolateAnims(t)
 
 	s := NewSpinner()
-	s.SetParent(NewForm())
+	s.SetParent(newBusyAnimationTestHost(t))
 	if !HasActiveAnimations() {
 		t.Fatalf("attached, visible, busy spinner registered no animation: "+
 			"activeCount() = %d, want 1", animManager.activeCount())
@@ -97,7 +97,7 @@ func TestSpinnerDetachedDoesNotDriveLoop(t *testing.T) {
 			spinnerIsolateAnims(t)
 
 			s := NewSpinner()
-			s.SetParent(NewForm())
+			s.SetParent(newBusyAnimationTestHost(t))
 			if n := animManager.activeCount(); n != 1 {
 				t.Fatalf("attached busy spinner: activeCount() = %d, want 1", n)
 			}
@@ -122,7 +122,7 @@ func TestSpinnerVisibleKeepsAnimating(t *testing.T) {
 	spinnerIsolateAnims(t)
 
 	s := NewSpinner()
-	s.SetParent(NewForm())
+	s.SetParent(newBusyAnimationTestHost(t))
 	s.SetSize(24, 24)
 
 	if n := animManager.activeCount(); n != 1 {
@@ -238,23 +238,11 @@ func (r *spinnerDotRecorder) Arc(xc, yc, radius, angle1, angle2 float64) {
 func (r *spinnerDotRecorder) SetBrush1(c paint.Color) {}
 func (r *spinnerDotRecorder) Fill()                   {}
 
-// TestSpinnerUnderAHiddenAncestorStillAnimates is the guard for the review
-// that rejected the first version of this fix. canDrive() originally also
-// required IsAllAncentorsVisible(). Nothing observes that input: setVisible
-// dispatches OnShow/OnHide to the widget it was called on and never to its
-// descendants, so a spinner that answered "no" because of an ancestor was
-// never re-asked — and Draw only checks busy, so the user saw a busy
-// indicator that never moved.
-//
-// The shape is not contrived. StackedWidget.AddPage calls SetParent then
-// Hide on the page it was handed, and TabWidget.AddTab routes into it, so
-// the ordinary "add the page, then fill it" order attaches the spinner under
-// a hidden ancestor. Selecting that tab shows the page and the spinner is
-// then fully visible, busy, and — with the clause in — driving nothing.
-func TestSpinnerUnderAHiddenAncestorStillAnimates(t *testing.T) {
+// A page populated while hidden must stay idle, then animate on ancestor Show.
+func TestSpinnerUnderHiddenAncestorPausesAndRestarts(t *testing.T) {
 	spinnerIsolateAnims(t)
 
-	host := NewForm()
+	host := newBusyAnimationTestHost(t)
 	page := NewVBox()
 	page.SetParent(host)
 	page.Hide() // what StackedWidget.AddPage does to the page it takes
@@ -262,6 +250,10 @@ func TestSpinnerUnderAHiddenAncestorStillAnimates(t *testing.T) {
 	sp := NewSpinner()
 	sp.SetParent(page) // attached while the ancestor is hidden
 	sp.SetBounds(0, 0, 28, 28)
+
+	if HasActiveAnimations() {
+		t.Fatal("hidden page still drives the frame loop")
+	}
 
 	page.Show() // selecting the tab
 

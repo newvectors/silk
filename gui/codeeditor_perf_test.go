@@ -147,7 +147,7 @@ func TestTokenCacheInlineEditSelfHeals(t *testing.T) {
 
 	// Mutate line 1 in place without changing the line count, mimicking the
 	// effect of a keystroke that lands through rebuildText.
-	lines := e.Lines()
+	lines := e.lines
 	lines[1] = "bar_x"
 	e.rebuildText()
 
@@ -333,7 +333,7 @@ func TestMeasureTextZeroAllocMonospace(t *testing.T) {
 func TestFoldRegionsCacheMatchesUncached(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText(foldSource2000())
-	got := e.FoldRegions()          // first call computes + caches
+	got := e.FoldRegions() // first call computes + caches
 	want := computeFoldRegions(e.Lines())
 	if len(got) != len(want) {
 		t.Fatalf("cached fold region count=%d want=%d", len(got), len(want))
@@ -362,7 +362,7 @@ func TestFoldCacheInvalidatesOnEdit(t *testing.T) {
 
 	// Drop the opening brace of g, keeping the line count the same. Its region
 	// (now an unbalanced body) must disappear from the recomputed set.
-	lines := e.Lines()
+	lines := e.lines
 	lines[3] = "func g()"
 	e.rebuildText()
 

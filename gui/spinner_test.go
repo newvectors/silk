@@ -40,7 +40,7 @@ func TestNewSpinnerDefaults(t *testing.T) {
 func TestSetBusyTogglesAnimationState(t *testing.T) {
 	s := NewSpinner() // busy=true at construction
 	defer s.SetBusy(false)
-	s.SetParent(NewForm())
+	s.SetParent(newBusyAnimationTestHost(t))
 	if s.anim == nil || s.anim.State() != AnimRunning {
 		t.Errorf("attached busy spinner must have a running animation; got %v", animState(s))
 	}
@@ -68,7 +68,7 @@ func animState(s *Spinner) interface{} {
 // no-op SetBusy.
 func TestSetBusyIdempotent(t *testing.T) {
 	s := NewSpinner()
-	s.SetParent(NewForm()) // arms the heartbeat; see canDrive
+	s.SetParent(newBusyAnimationTestHost(t)) // arms the heartbeat; see canDrive
 	first := s.anim
 	if first == nil {
 		t.Fatalf("attached busy spinner has no animation to compare against")

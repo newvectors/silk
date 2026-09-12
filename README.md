@@ -82,6 +82,20 @@ Detailed, dated verification records:
 [popup ownership](POPUP_AUDIT.md) · [designer gaps](DESIGNER_GAPS.md).
 Local `bin/qa-artifacts/` evidence mentioned in those records is not shipped in Git.
 
+### Rendering performance
+
+Static UI no longer requests frames just to maintain a refresh rate. Ongoing
+quiet animation is capped at 25 FPS; input briefly raises the ceiling to 60 FPS,
+with extra recovery time after expensive frames. Windows rendering uses a
+coalesced deadline timer rather than a paint-to-animation feedback loop;
+custom modal dialogs block waiting for messages instead of polling every 1 ms.
+Hidden busy widgets stop their animation. Text/modified-state/outline caches
+avoid repeated full-document work while idle. These are code-level fixes;
+**Windows native CPU/latency improvement still requires measurement**.
+
+See [bounded CPU capture and Windows verification](PERFORMANCE-CAPTURE.md).
+Profiling is opt-in, local-only, and stops automatically after 30 seconds.
+
 ## Quick Start
 
 ```bash

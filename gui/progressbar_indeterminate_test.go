@@ -85,6 +85,7 @@ func TestMarqueeOffsetClampsToTrack(t *testing.T) {
 // other tests can pollute.
 func TestSetIndeterminateTogglesAnimation(t *testing.T) {
 	p := NewProgressBar()
+	p.SetParent(newBusyAnimationTestHost(t))
 	defer p.SetIndeterminate(false) // never leak a looping anim
 
 	if p.IsIndeterminate() {
@@ -115,6 +116,7 @@ func TestSetIndeterminateTogglesAnimation(t *testing.T) {
 // must not replace the running heartbeat (no churn / re-alloc).
 func TestSetIndeterminateIdempotent(t *testing.T) {
 	p := NewProgressBar()
+	p.SetParent(newBusyAnimationTestHost(t))
 	defer p.SetIndeterminate(false)
 	p.SetIndeterminate(true)
 	first := p.anim
@@ -133,6 +135,7 @@ func TestSetIndeterminateIdempotent(t *testing.T) {
 // drain, we stop then tick exactly once).
 func TestSetIndeterminateAffectsHasActiveAnimations(t *testing.T) {
 	p := NewProgressBar()
+	p.SetParent(newBusyAnimationTestHost(t))
 	defer p.SetIndeterminate(false)
 
 	p.SetIndeterminate(true)

@@ -265,13 +265,21 @@ func PostQuitMessage(exitCode int) {
 }
 
 func GetMessage(msg *MSG, hwnd HWND, msgFilterMin, msgFilterMax uint32) bool {
-	ret, _, _ := procGetMessage.Call(
+	ok, _ := GetMessageResult(msg, hwnd, msgFilterMin, msgFilterMax)
+	return ok
+}
+
+// GetMessageResult preserves Win32's three outcomes: a retrieved message,
+// WM_QUIT (false, nil), or failure (false, error). The BOOL return is signed
+// 32-bit even in a 64-bit process; treating -1 as true repeats stale messages.
+func GetMessageResult(msg *MSG, hwnd HWND, msgFilterMin, msgFilterMax uint32) (bool, error) {
+	ret, _, callErr := procGetMessage.Call(
 		uintptr(unsafe.Pointer(msg)),
 		uintptr(hwnd),
 		uintptr(msgFilterMin),
 		uintptr(msgFilterMax))
 
-	return ret != 0
+	return decodeGetMessageResult(ret, callErr)
 }
 
 func TranslateMessage(msg *MSG) bool {

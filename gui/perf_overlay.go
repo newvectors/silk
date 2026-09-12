@@ -9,7 +9,7 @@ import (
 
 // PerfStats is the process-wide sampler for paint / layout / frame timing.
 // It's designed to be toggled on-demand with F12: when invisible, the
-// per-frame accounting is still cheap (a few atomics) but the overlay does
+// per-frame accounting remains a small mutex-protected update but the overlay does
 // no drawing.
 type PerfStats struct {
 	mu         sync.Mutex
@@ -19,6 +19,8 @@ type PerfStats struct {
 
 	// Running averages over the last ~60 samples, stored as exponential
 	// moving averages so a single outlier doesn't distort the reading.
+	paintCount uint64
+	paintTotal time.Duration
 	paintTime  time.Duration
 	layoutTime time.Duration
 
@@ -39,9 +41,7 @@ func (s *PerfStats) Toggle() {
 	s.mu.Unlock()
 	// Force all visible windows to repaint so the overlay appears/disappears
 	// immediately. We don't know which window the user is on, so mark all
-	// visible ones dirty. Implementation is platform-specific; on Windows
-	// this is currently a no-op (the overlay still appears on the next
-	// paint triggered by user interaction).
+	// visible ones dirty. Both platform backends schedule the repaint without bypassing frame pacing.
 	markAllWindowsDirty()
 }
 
@@ -83,6 +83,8 @@ func (s *PerfStats) RecordFrame() {
 func (s *PerfStats) RecordPaint(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.paintCount++
+	s.paintTotal += d
 	if s.paintTime == 0 {
 		s.paintTime = d
 	} else {
@@ -196,4 +198,13 @@ func CountWidgets(iw IWidget) int {
 		n += CountWidgets(ch)
 	}
 	return n
+}
+
+// RenderStats reports lifetime paint totals without enabling the overlay or
+// causing redraw. Safe from the bounded profiler's background stop callback.
+func RenderStats() string {
+	s := GlobalPerfStats
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fmt.Sprintf("Paints=%d PaintWall=%s", s.paintCount, s.paintTotal)
 }

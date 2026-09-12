@@ -98,14 +98,12 @@ type CodeOutlinePanel struct {
 	sortMode     int
 	exportedOnly bool
 
-	// cache: last known text size to avoid re-parsing when content hasn't
-	// changed, plus the host's document revision. The size fingerprint is
-	// blind to same-length edits ("aa" → "bb"), so revision is the
-	// authoritative invalidation signal; dirty records that one landed.
-	lastTextLen   int
-	lastLineCount int
-	revision      int
-	dirty         bool
+	// The editor owns its content revision, so unchanged Draw calls check one
+	// integer instead of walking every line. Hosts can additionally invalidate
+	// semantic data through SetRevision without changing the editor text.
+	lastTextRevision uint64
+	revision         int
+	dirty            bool
 }
 
 func NewCodeOutlinePanel() *CodeOutlinePanel {
@@ -200,10 +198,9 @@ func (this *CodeOutlinePanel) ExportedOnly() bool {
 
 // SetRevision records the host's document revision for the bound buffer
 // (an editor change counter, or the LSP version the host sends with
-// didChange). Any change marks the outline stale so the next
-// RefreshIfStale re-reads it — the text-size fingerprint alone misses
-// same-length edits, which used to leave the outline showing symbols that
-// no longer exist.
+// didChange). Any change marks the outline stale so the next RefreshIfStale
+// re-reads it. Ordinary editor mutations are tracked automatically; this
+// optional host revision also supports out-of-band semantic updates.
 func (this *CodeOutlinePanel) SetRevision(rev int) {
 	if rev == this.revision {
 		return
@@ -212,40 +209,31 @@ func (this *CodeOutlinePanel) SetRevision(rev int) {
 	this.dirty = true
 }
 
-// RefreshIfStale re-reads the outline when the bound buffer looks changed
-// — either the revision moved (SetRevision) or the cheap text-size
-// fingerprint did. Returns true when a refresh actually ran. Draw calls
-// it every frame; a host that edits the buffer itself may call it too.
+// RefreshIfStale re-reads the outline when the editor content or host revision
+// changes. The unchanged Draw path is O(1), including for large documents and
+// same-length edits which the old text-size fingerprint could not detect.
 func (this *CodeOutlinePanel) RefreshIfStale() bool {
-	textLen, lineCount := this.contentMetrics()
-	if !this.dirty && textLen == this.lastTextLen && lineCount == this.lastLineCount {
+	revision := this.editorTextRevision()
+	if !this.dirty && revision == this.lastTextRevision {
 		return false
 	}
-	this.lastTextLen = textLen
-	this.lastLineCount = lineCount
+	this.lastTextRevision = revision
 	this.dirty = false
 	this.RefreshSymbols()
 	return true
 }
 
-// contentMetrics returns the bound editor's total text length and line
-// count — the cheap "did the buffer change" fingerprint.
-func (this *CodeOutlinePanel) contentMetrics() (int, int) {
+func (this *CodeOutlinePanel) editorTextRevision() uint64 {
 	if this.editor == nil {
-		return 0, 0
+		return 0
 	}
-	lines := this.editor.Lines()
-	textLen := 0
-	for _, l := range lines {
-		textLen += len(l)
-	}
-	return textLen, len(lines)
+	return this.editor.TextRevision()
 }
 
-// seedContentCache records the current buffer size as the baseline for
+// seedContentCache records the current editor revision as the baseline for
 // RefreshIfStale, so a refresh that just ran is not repeated next frame.
 func (this *CodeOutlinePanel) seedContentCache() {
-	this.lastTextLen, this.lastLineCount = this.contentMetrics()
+	this.lastTextRevision = this.editorTextRevision()
 	this.dirty = false
 }
 

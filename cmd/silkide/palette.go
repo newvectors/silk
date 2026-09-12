@@ -166,6 +166,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 	})
 	add("Preview", actionKeyHint()+"+Shift+R", func() { previewDesign(designCanvas) })
+	add("Print Design...", "", func() { performPrintDesign(designCanvas) })
 	add("Export...", "", func() {
 		performExport(designCanvas)
 	})

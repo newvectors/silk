@@ -378,6 +378,16 @@ func drawWidgetIcon(g paint.Painter, factoryName string, x, y, size float64) {
 	}
 
 	switch shortName {
+	case "PrintButton", "GanttChart":
+		name := "printer"
+		if shortName == "GanttChart" {
+			name = "gantt"
+		}
+		g.Save()
+		g.Translate(x, y)
+		g.DrawIcon(paint.LoadIcon(name), s, false)
+		g.Restore()
+
 	case "Button":
 		// Filled rounded rectangle (blue)
 		g.SetBrush1(paint.Color{R: 100, G: 149, B: 237, A: 255})

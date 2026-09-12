@@ -273,9 +273,8 @@ func main() {}
 	wantOutlineRows(t, p, heuristic)
 }
 
-// TestOutlineRevisionInvalidation is the regression: a same-length,
-// same-line-count edit leaves the size fingerprint untouched, so nothing
-// short of a revision bump can invalidate the outline.
+// TestOutlineRevisionInvalidation covers automatic same-length edit tracking
+// as well as the optional explicit host revision signal.
 func TestOutlineRevisionInvalidation(t *testing.T) {
 	ed := gui.NewCodeEditor()
 	ed.SetText("package p\n\nfunc aaa() {}\n")
@@ -290,10 +289,10 @@ func TestOutlineRevisionInvalidation(t *testing.T) {
 
 	// Same byte count, same line count, different symbol.
 	ed.SetText("package p\n\nfunc bbb() {}\n")
-	if p.RefreshIfStale() {
-		t.Error("RefreshIfStale claimed a refresh without a revision change")
+	if !p.RefreshIfStale() {
+		t.Error("same-length editor change did not invalidate the outline")
 	}
-	wantOutlineRows(t, p, []string{"0:aaa"}) // stale, exactly the bug being closed
+	wantOutlineRows(t, p, []string{"0:bbb"})
 
 	p.SetRevision(7)
 	if !p.RefreshIfStale() {
@@ -311,7 +310,7 @@ func TestOutlineRevisionInvalidation(t *testing.T) {
 		t.Error("re-setting the same revision invalidated the outline")
 	}
 
-	// The old length fingerprint still works on its own.
+	// Length and line-count changes also require no host revision hook.
 	ed.SetText("package p\n\nfunc bbb() {}\nfunc ccc() {}\n")
 	if !p.RefreshIfStale() {
 		t.Fatal("length change did not invalidate the outline")

@@ -105,11 +105,21 @@ func (this *ProgressBar) SetIndeterminate(on bool) {
 	this.indeterminate = on
 	if on {
 		this.startTime = time.Now()
+	}
+	this.syncBusyAnimationVisibility()
+	this.Self().Update()
+}
+
+func (this *ProgressBar) syncBusyAnimationVisibility() {
+	before := this.anim
+	if this.indeterminate && busyAnimationVisible(this.Self()) {
 		this.startAnim()
 	} else {
 		this.stopAnim()
 	}
-	this.Self().Update()
+	if before != this.anim {
+		this.Self().Update()
+	}
 }
 
 // IsIndeterminate reports whether the bar is in busy mode.
@@ -127,6 +137,8 @@ func (this *ProgressBar) startAnim() {
 		return
 	}
 	this.anim = NewAnimation(0, 1, indeterminateCycle).SetLoop(true).SetEase(EaseLinear)
+	this.anim.updatesOwnRegion = true
+	this.anim.OnUpdate(func(float64) { this.Self().Update() })
 	this.anim.Start()
 }
 

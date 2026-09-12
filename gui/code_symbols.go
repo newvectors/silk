@@ -75,15 +75,20 @@ func symbolKindColor(kind int) paint.Color {
 
 // --- Symbol Parser ---
 
-// ParseSymbols scans the current editor content and returns all top-level
-// function, type, variable, and constant declarations found by simple
-// line-by-line pattern matching.
+// ParseSymbols returns an independent snapshot of the current Go declarations
+// found by simple line-by-line pattern matching. Parsing is shared with the
+// breadcrumb and test gutter and runs once per text revision. Modifying the
+// returned slice cannot change the editor's cached symbols.
 func (this *CodeEditor) ParseSymbols() []CodeSymbol {
+	return append([]CodeSymbol(nil), this.cachedSymbols()...)
+}
+
+func parseGoCodeSymbols(lines []string) []CodeSymbol {
 	var symbols []CodeSymbol
 	inVarBlock := false
 	inConstBlock := false
 
-	for i, line := range this.lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
 		// Skip empty lines and comments
@@ -430,22 +435,12 @@ func (this *CodeEditor) goToLine(line int) {
 
 // --- Current Function Detection ---
 
-// currentFunction returns the symbol that the cursor is currently inside of.
-// It walks the parsed symbols and finds the last one whose Line <= cursorLine.
+// currentFunction returns a package-private read-only cached declaration at or
+// before the caret. Its function-only index avoids scanning every declaration
+// on each draw, and caret movement does not invalidate the parsed document.
 func (this *CodeEditor) currentFunction() *CodeSymbol {
-	symbols := this.ParseSymbols()
-	var best *CodeSymbol
-	for i := range symbols {
-		s := &symbols[i]
-		if s.Kind == SymFunc || s.Kind == SymMethod {
-			if s.Line <= this.cursorLine {
-				best = s
-			} else {
-				break
-			}
-		}
-	}
-	return best
+	this.cachedSymbols()
+	return this.symbolCache.functionAt(this.cursorLine)
 }
 
 // --- Symbol Popup ---

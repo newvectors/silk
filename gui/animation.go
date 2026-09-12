@@ -131,6 +131,9 @@ type Animation struct {
 	reverse  bool
 	onUpdate func(float64)
 	onDone   func()
+	// Only internal fixed-geometry widgets may opt in. Their callback already
+	// invalidates every changed pixel, so no whole-window fallback is needed.
+	updatesOwnRegion bool
 }
 
 // NewAnimation creates a property animation that transitions a float64 value
@@ -421,6 +424,11 @@ type animationManager struct {
 var animManager = &animationManager{}
 
 func (m *animationManager) add(a *Animation) {
+	for _, existing := range m.animations {
+		if existing == a {
+			return
+		}
+	}
 	m.animations = append(m.animations, a)
 }
 
@@ -443,6 +451,11 @@ func (m *animationManager) remove(a *Animation) {
 }
 
 func (m *animationManager) addGroup(g *AnimationGroup) {
+	for _, existing := range m.groups {
+		if existing == g {
+			return
+		}
+	}
 	m.groups = append(m.groups, g)
 }
 
@@ -467,28 +480,50 @@ func (m *animationManager) activeCount() int {
 
 // Tick 应在每帧调用（由事件循环驱动）
 func (m *animationManager) Tick() {
-	// tick individual animations
+	// Callbacks may register new animations or Stop siblings. Tick the original
+	// slice first, then compact the CURRENT registry. Compacting while invoking
+	// callbacks overwrote newly registered entries and could resurrect stopped
+	// widgets. remove uses copy-on-write, so the iteration remains stable.
+	for _, a := range m.animations {
+		a.tick()
+	}
 	alive := m.animations[:0]
 	for _, a := range m.animations {
-		if !a.tick() {
+		if a.state != AnimDone {
 			alive = append(alive, a)
 		}
 	}
+	clear(m.animations[len(alive):])
 	m.animations = alive
-
-	// tick groups
-	aliveGroups := m.groups[:0]
 	for _, g := range m.groups {
-		if !g.tick() {
-			aliveGroups = append(aliveGroups, g)
+		g.tick()
+	}
+	groups := m.groups[:0]
+	for _, g := range m.groups {
+		if g.state != AnimDone {
+			groups = append(groups, g)
 		}
 	}
-	m.groups = aliveGroups
+	clear(m.groups[len(groups):])
+	m.groups = groups
 }
 
 // AnimationTick advances all active animations by one frame. Call once per frame from the event loop.
+var animationTickActive bool
+
 func AnimationTick() {
+	// A callback can synchronously open a modal loop. The nested loop may
+	// process input and paint, but must not recurse into the same callback.
+	if animationTickActive {
+		return
+	}
+	animationTickActive = true
+	defer func() { animationTickActive = false }()
 	animManager.Tick()
+}
+
+func continuousFrameWanted() bool {
+	return (!animationTickActive && HasActiveAnimations()) || GlobalPerfStats.IsVisible()
 }
 
 // HasActiveAnimations returns true if any animations or groups are currently running.
@@ -499,4 +534,21 @@ func AnimationTick() {
 // lingering) entry pin the loop at 60fps for the life of the process.
 func HasActiveAnimations() bool {
 	return animManager.activeCount() > 0
+}
+
+func animationsRequireFullRepaint() bool {
+	if GlobalPerfStats.IsVisible() {
+		return true
+	}
+	for _, a := range animManager.animations {
+		if a.state == AnimRunning && !a.updatesOwnRegion {
+			return true
+		}
+	}
+	for _, g := range animManager.groups {
+		if g.state == AnimRunning {
+			return true
+		}
+	}
+	return false
 }
